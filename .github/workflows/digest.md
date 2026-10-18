@@ -5,7 +5,7 @@ on:
   schedule: daily around 10:00 utc+8
   # 兜底防线: 距上次真正启动过 agent 的 run 不足 22 小时则跳过.
   # 日切由下面的 skip-if-match 负责, 这里只防"手动补跑后当天又自动跑".
-  cooldown: 22h
+  cooldown: 5m
   # 最高每天一次: 今天已出过日报就不再出.
   skip-if-match: 'is:issue is:open label:report in:title "[日报]" created:>=2026-10-19'
   # 绝对数量门槛: 起始线之后还没进过日报的条目不足 min 条时, 整条 run 在
