@@ -104,6 +104,9 @@ class LibraryIngest(StrEnum):
     CLOUDDRIVE = "clouddrive"
     """CloudDrive file_system_watcher webhook; 不 schedule Observer."""
 
+    EVERYTHING = "everything"
+    """Everything 索引轮询; 不 schedule Observer, 由 ``WatcherService`` 周期枚举增量入库."""
+
 
 class DownloadableResource(StrEnum):
     """影片附属资源类型: 刮削写入 Resource, 整理时按库配置复制到库路径."""

@@ -49,6 +49,7 @@ def test_resolve_ingest_requires_cloud_path() -> None:
     with pytest.raises(ValueError, match="cloud_path"):
         resolve_ingest_cloud_path(LibraryIngest.CLOUDDRIVE, "/")
     assert resolve_ingest_cloud_path(LibraryIngest.NATIVE, "/115open/x") is None
+    assert resolve_ingest_cloud_path(LibraryIngest.EVERYTHING, "/115open/x") is None
     assert resolve_ingest_cloud_path(LibraryIngest.CLOUDDRIVE, "/115open/云下载/") == "/115open/云下载"
 
 

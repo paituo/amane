@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from amane.db.models import TaskType
+from amane.enums import LibraryIngest
 from amane.organize import VIDEO_TEMPLATE_DEFAULT
 
 if TYPE_CHECKING:
@@ -159,6 +160,7 @@ class TestLibraries:
             await client.post("libraries", json={**base, "blacklist_patterns": ["广告", "(ads"]})
         ).status_code == 422
         assert (await client.post("libraries", json={**base, "min_file_size": -1})).status_code == 422
+        assert (await client.post("libraries", json={**base, "ingest": "foobar"})).status_code == 422
         assert (
             await client.post("libraries", json={**base, "subtitle_extensions": [".srt", "bad ext"]})
         ).status_code == 422
@@ -239,6 +241,41 @@ class TestLibraries:
             t for t in await repo.list_tasks(task_types=[TaskType.REFRESH]) if t.payload.get("library_id") == quiet_id
         ]
         assert still == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_create_everything_ingest(self, client: AsyncClient, repo: Repository, safe_path: Path):
+        """Everything 通道只换发现方式, 库根仍是本机真实路径; 虚拟路径不该跟着落库."""
+        root = safe_path / "indexed"
+        root.mkdir()
+
+        resp = await client.post(
+            "libraries",
+            json={"path": str(root), "ingest": "everything", "cloud_path": "/115open/ignored", "scan": False},
+        )
+
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["ingest"] == "everything"
+        assert body["cloud_path"] is None
+        assert body["path"] == str(root)
+
+        stored = await repo.get_library(body["id"])
+        assert stored is not None
+        assert stored.ingest is LibraryIngest.EVERYTHING
+        assert stored.cloud_path is None
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_update_switches_ingest_to_everything(self, client: AsyncClient, repo: Repository, safe_path: Path):
+        """从 clouddrive 切到 everything 时, 残留的 cloud_path 必须被清掉, 否则会留着一条无人消费的虚拟路径."""
+        lib = await repo.create_library(
+            name="cd", path=str(safe_path), ingest=LibraryIngest.CLOUDDRIVE, cloud_path="/115open/lib"
+        )
+
+        resp = await client.patch(f"libraries/{lib.id}", json={"ingest": "everything"})
+
+        assert resp.status_code == 200
+        assert resp.json()["ingest"] == "everything"
+        assert resp.json()["cloud_path"] is None
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_library_path_is_resolved(self, client: AsyncClient, safe_path: Path):

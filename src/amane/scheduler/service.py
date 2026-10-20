@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import os
 from collections.abc import Coroutine, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -15,12 +16,14 @@ from ..events import EventBus, EventType
 from ..handlers._common import refresh_external_subtitle, register_media_file, scan_library
 from ..handlers.models import ScrapePayload
 from ..library import LibraryFileKind, LibraryScan
+from ..library.everything import EverythingClient, EverythingError, EverythingUnavailable
 from ..parsing import parse_file_info
 from ..utils.path import is_descendant, path_is_under
 from .clouddrive import CloudDriveChange, CloudDriveRoute, local_for, match_route
 from .watcher import FileWatcher
 
 if TYPE_CHECKING:
+    from ..config import EverythingConfig
     from ..db.repository import Repository
 
 logger = structlog.get_logger()
@@ -50,11 +53,22 @@ def _dir_in_scope(path: Path, route: CloudDriveRoute) -> bool:
     return _same_path(path, root)
 
 
+@dataclass(frozen=True, slots=True)
+class EverythingRoute:
+    """一条 Everything 库的枚举范围. 与 CloudDrive 路由不同, 这里没有虚拟路径映射."""
+
+    library_id: int
+    root: Path
+    recursive: bool
+    scan: LibraryScan
+
+
 class WatcherService:
     """新文件注册 MediaFile; automation=scrape 时解析番号并提交 SCRAPE.
     删除移除 MediaFile; 移动更新路径.
 
-    ingest=native 的库挂 FileWatcher; ingest=clouddrive 的库只进入 webhook 路由表.
+    ingest=native 的库挂 FileWatcher; ingest=clouddrive 的库只进入 webhook 路由表;
+    ingest=everything 的库按 ``EverythingConfig.poll_interval`` 周期枚举索引.
     """
 
     def __init__(
@@ -66,6 +80,8 @@ class WatcherService:
         debounce_seconds: float = 3.0,
         check_interval: float = _CHECK_INTERVAL,
         observer_timeout: float = 1.0,
+        everything_config: EverythingConfig | None = None,
+        everything_client: EverythingClient | None = None,
     ):
         self._repo = repo
         self._event_bus = event_bus
@@ -74,9 +90,13 @@ class WatcherService:
         self._debounce_seconds = debounce_seconds
         self._check_interval = check_interval
         self._observer_timeout = observer_timeout
+        self._everything_config = everything_config
         self._watcher: FileWatcher | None = None
         self._debounce_task: asyncio.Task | None = None
+        self._everything_task: asyncio.Task[None] | None = None
+        self._everything: EverythingClient | None = everything_client
         self._cloud_routes: dict[int, CloudDriveRoute] = {}
+        self._everything_routes: dict[int, EverythingRoute] = {}
         self._running = False
 
     @property
@@ -125,6 +145,93 @@ class WatcherService:
             recursive=lib.recursive,
         )
 
+    def _register_everything(self, lib: Library) -> None:
+        """注册 Everything 库: 只登记枚举范围, 不挂 Observer."""
+        assert lib.id is not None
+        self._everything_routes[lib.id] = EverythingRoute(
+            library_id=lib.id,
+            root=Path(lib.path),
+            recursive=lib.recursive,
+            scan=self._scan_for(lib),
+        )
+        self._running = True
+        self._ensure_everything_task()
+        logger.info("everything source registered", library_id=lib.id, path=lib.path, recursive=lib.recursive)
+
+    def _everything_client(self) -> EverythingClient:
+        if self._everything is None:
+            config = self._everything_config
+            if config is None:
+                raise EverythingUnavailable("未配置 [everything] 段")
+            self._everything = EverythingClient(
+                config.executable or None,
+                instance=config.instance,
+                timeout_ms=config.timeout_ms,
+            )
+        return self._everything
+
+    def _ensure_everything_task(self) -> None:
+        if self._everything_task is not None:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            logger.warning("no event loop available for everything poller")
+            return
+        self._everything_task = loop.create_task(self._everything_loop())
+
+    async def _everything_loop(self) -> None:
+        interval = self._everything_config.poll_interval if self._everything_config is not None else 300.0
+        while self._running:
+            try:
+                await self._poll_everything()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                # 单库异常不得终止轮询; 下一轮继续.
+                logger.exception("everything poll failed")
+            await asyncio.sleep(interval)
+
+    async def _poll_everything(self) -> None:
+        for route in list(self._everything_routes.values()):
+            if route.library_id not in self._everything_routes:
+                continue
+            try:
+                # es.exe 是子进程, 分类含 stat; 两者都不能占用事件循环.
+                paths = await asyncio.to_thread(self._collect_everything, route)
+            except EverythingUnavailable as exc:
+                logger.warning("everything source unavailable", library_id=route.library_id, error=str(exc))
+                continue
+            except EverythingError:
+                logger.exception("everything query failed", library_id=route.library_id)
+                continue
+            # 一次取回已登记路径做集合比较: 稳态轮询下绝大多数命中都在这里被跳过,
+            # 不必逐条走 ``_on_file_found`` 的查重.
+            known = {media.path for media in await self._repo.list_media_files(library_id=route.library_id, limit=None)}
+            for path in paths:
+                if route.library_id not in self._everything_routes:
+                    break
+                if str(path) in known:
+                    continue
+                try:
+                    await self._on_file_found(path, route.library_id)
+                except Exception:
+                    # 单条失败 (典型是与其它通道竞态撞上路径 UNIQUE) 不打断整轮: 其余文件照常入库,
+                    # 失败的这条下一轮重试时会被"已登记则跳过"收敛.
+                    logger.warning(
+                        "everything file ingest failed", library_id=route.library_id, path=str(path), exc_info=True
+                    )
+                    continue
+                known.add(str(path))
+
+    def _collect_everything(self, route: EverythingRoute) -> list[Path]:
+        hits = self._everything_client().search(
+            route.root,
+            route.scan.media_extensions,
+            recursive=route.recursive,
+        )
+        return [hit.path for hit in hits if route.scan.classify(hit.path) is LibraryFileKind.MEDIA]
+
     def _log_observer_start_error(self, exc: OSError) -> None:
         if "inotify" in str(exc).lower() or "watch" in str(exc).lower():
             logger.error(
@@ -166,9 +273,12 @@ class WatcherService:
 
         native = [lib for lib in libraries if lib.ingest is LibraryIngest.NATIVE]
         cloud = [lib for lib in libraries if lib.ingest is LibraryIngest.CLOUDDRIVE]
+        everything = [lib for lib in libraries if lib.ingest is LibraryIngest.EVERYTHING]
 
         for lib in cloud:
             self._register_cloud(lib)
+        for lib in everything:
+            self._register_everything(lib)
 
         if native:
             self._watcher = self._new_watcher()
@@ -195,12 +305,19 @@ class WatcherService:
             "watcher service started",
             native_count=len(native),
             clouddrive_count=len(cloud),
+            everything_count=len(everything),
             native_observer=self._watcher is not None,
         )
 
     async def stop(self) -> None:
         self._running = False
         self._cloud_routes.clear()
+        self._everything_routes.clear()
+        if self._everything_task:
+            self._everything_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._everything_task
+            self._everything_task = None
         if self._debounce_task:
             self._debounce_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
@@ -222,6 +339,9 @@ class WatcherService:
         if lib.ingest is LibraryIngest.CLOUDDRIVE:
             self._register_cloud(lib)
             return
+        if lib.ingest is LibraryIngest.EVERYTHING:
+            self._register_everything(lib)
+            return
         self.add_library(
             lib.path,
             lib.id,
@@ -240,8 +360,9 @@ class WatcherService:
         skip_patterns: Sequence[str | None] | None = None,
         min_file_size: int = 0,
     ) -> None:
-        """运行时热添加 native 监控库. clouddrive 库经 ``sync_library``."""
+        """运行时热添加 native 监控库. clouddrive / everything 库经 ``sync_library``."""
         self._cloud_routes.pop(library_id, None)
+        self._everything_routes.pop(library_id, None)
         if self._watcher is None:
             self._watcher = self._new_watcher()
             try:
@@ -284,6 +405,7 @@ class WatcherService:
     def remove_library(self, library_id: int) -> None:
         """运行时热移除监控库; watcher 未启动或该库未监控则为无操作."""
         self._cloud_routes.pop(library_id, None)
+        self._everything_routes.pop(library_id, None)
         if self._watcher is None:
             return
         self._watcher.unwatch(library_id)

@@ -1,18 +1,30 @@
 # 文件发现
 
-> 入口: `src/amane/scheduler/`. 监视器线程与防抖见源码; 本文只写通道分流与 CloudDrive webhook 契约.
+> 入口: `src/amane/scheduler/`. 监视器线程与防抖见源码; 本文只写通道分流与各通道契约.
 > 入库归属见 [data-model.md](data-model.md), 任务入队见 [task-system.md](task-system.md).
 
-## 两条发现通道
+## 三条发现通道
 
-`Library.ingest` 选择该库如何发现新文件; `automation=none` 时两条都不收事件.
+`Library.ingest` 选择该库如何发现新文件; `automation=none` 时都不收事件.
 
 | ingest | 事件源 | Observer |
 |--------|--------|----------|
 | `native` (默认) | watchdog (`Observer` 或 `PollingObserver`) | 该库 `schedule` 到进程内**唯一** FileWatcher |
 | `clouddrive` | `POST /api/webhooks/clouddrive` | **不** schedule, 避免 FUSE 挂载上没有 `FileCreated` 的 115 侧落盘被漏掉, 也避免与 webhook 双通道重复入库 |
+| `everything` | `es.exe` 周期查询本机 Everything 索引 | **不** schedule, 按 `[everything].poll_interval` 全量重扫, 只发现新增 |
 
 `use_polling` 仍是进程级、仅作用于 native 库, 不能按库混用 FSEvents 与轮询.
+
+## Everything 通道
+
+只支持 Windows: 走官方 CLI `es.exe` (随 Everything 安装), 不用 HTTP server (默认 8080 常被其它程序占用, 且需用户手工开启) 也不用 IPC DLL (ctypes 直调会 access violation).
+
+- 枚举: `-path <库根> /a-d ext:...` 导出 JSON. **搜索词必须是最后一个参数**, 放在选项前会被吞掉. 导出固定用 `-export-json` + `-utf8-bom` 落临时文件再读: stdout 是系统代码页 (`中文` 会变乱码), 且管道提前关闭时 `es.exe` 返回 1, 用退出码判失败会误报.
+- 失败分类: 退出码 `8` = Everything 未运行 / IPC 不可达, 归为「来源不可用」, 本轮跳过并告警, **不回退磁盘遍历** (回退会把一次索引故障放大成整库 IO); 其它非零退出码与非法 JSON 记异常, 同样跳过本轮.
+- 过滤复用 `LibraryScan`: 扩展名来自 `scan.media_extensions`, `classify` 决定是否 `register_media_file`. 命中后与 clouddrive 一样复用 `WatcherService._on_file_found`, 因此 `automation=scrape` 仍会提交 SCRAPE.
+- 枚举与 `classify` 的 stat 都在 `asyncio.to_thread` 里跑, 不占事件循环.
+
+该通道**只做新增**: 删除/移动不在其职责内, 索引滞后时可能先登记一个已消失的路径, 由后续清理或 REFRESH 收敛. 清理清单里的空目录/孤儿目录条目也不来自这里 (那需要逐层递归判断).
 
 ## CloudDrive 路径
 

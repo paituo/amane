@@ -591,6 +591,22 @@ class WatcherConfig(BaseModel):
     )
 
 
+class EverythingConfig(BaseModel):
+    """Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级."""
+
+    executable: str = ""
+    """``es.exe`` 路径. 空表示按常见安装位置探测."""
+
+    instance: str = ""
+    """Everything 实例名. 空表示默认实例."""
+
+    poll_interval: float = Field(default=300.0, ge=5.0, le=86400.0)
+    """全量枚举间隔 (秒). 索引只增不改的库可调大."""
+
+    timeout_ms: int = Field(default=5000, ge=500, le=600000)
+    """等 Everything 数据库加载的超时; 超过按来源不可用处理, 不回退磁盘遍历."""
+
+
 class LoggingConfig(BaseModel):
     level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = Field(default="INFO")
     debug_capture: bool = False
@@ -796,6 +812,7 @@ class HotSettings(BaseModel):
     llm: LLMConfig = LLMConfig()
     r18: R18Config = R18Config()
     watcher: WatcherConfig = WatcherConfig()
+    everything: EverythingConfig = EverythingConfig()
     worker: WorkerConfig = WorkerConfig()
     logging: LoggingConfig = LoggingConfig()
     plugins: dict[str, PluginConfig] = Field(default_factory=dict, json_schema_extra={"x-hidden": True})

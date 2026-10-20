@@ -210,6 +210,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
             use_polling=hot.watcher.use_polling,
             media_extensions=hot.watcher.media_extensions,
             debounce_seconds=hot.watcher.debounce_seconds,
+            everything_config=hot.everything,
         )
         await watcher_service.start()
     except Exception:

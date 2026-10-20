@@ -44,7 +44,7 @@ def optional_cloud_path(path: str | None) -> str | None:
 
 
 def resolve_ingest_cloud_path(ingest: LibraryIngest, cloud_path: str | None) -> str | None:
-    """ingest=clouddrive 时必须有 cloud_path; native 时清除."""
+    """ingest=clouddrive 时必须有 cloud_path; 其余通道一律清除."""
     if ingest is LibraryIngest.CLOUDDRIVE:
         resolved = optional_cloud_path(cloud_path)
         if resolved is None or resolved == "/":
