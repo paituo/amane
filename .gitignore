@@ -178,6 +178,8 @@ tests/crawlers/cases/
 
 # dev files
 *.ipynb
+temp/
+.workbuddy/
 
 # UI (Vite + pnpm)
 node_modules/
