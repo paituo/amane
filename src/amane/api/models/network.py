@@ -44,3 +44,5 @@ class ConnectivityReportResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     items: list[ConnectivityItemResponse] = Field(default_factory=list)
+    circuit_breakers: dict[str, str] = Field(default_factory=dict)
+    """WebClient 熔断器当前各 key (``proxy:<url>`` / ``host:<host>``) 的状态; 诊断「全站失败」根因."""

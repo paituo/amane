@@ -39,4 +39,9 @@ async def check_connectivity(
     """
     checker = ConnectivityChecker(runtime.factory, runtime.config.hot, runtime.plugin_manager)
     checks = await checker.check(req.source_ids if req is not None else None)
-    return ConnectivityReportResponse(items=[_item(check) for check in checks])
+    # 暴露 WebClient 熔断器快照: 当某个代理 / host 开路时, 这是全站刮削批量失败的根因, 界面据此给出明确提示.
+    breaker = getattr(runtime.web_client, "connectivity", None)
+    snapshot = breaker.snapshot() if breaker is not None else {}
+    return ConnectivityReportResponse(
+        items=[_item(check) for check in checks], circuit_breakers=snapshot
+    )

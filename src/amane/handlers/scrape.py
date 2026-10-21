@@ -1,14 +1,23 @@
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Protocol
 
 from structlog.contextvars import bind_contextvars
 
-from ..aggregate import SCALAR_FIELDS, AggregatedMetadata, CrawlerLike, FieldLanguage, aggregate, compile_priority
+from ..aggregate import (
+    ALL_FIELDS,
+    SCALAR_FIELDS,
+    AggregatedMetadata,
+    CrawlerLike,
+    FieldLanguage,
+    aggregate,
+    compile_priority,
+)
 from ..crawlers.models import SearchQuery
 from ..crawlers.site_roles import builtin_descriptors
 from ..db.models import TaskType
-from ..enums import ActorGender, MetadataField
+from ..enums import ActorGender, MetadataField, SiteName
 from ..media import materialize_images
+from ..net.errors import FailureReason
 from ..observability import current
 from ..observability.models import SiteOutcomeKind
 from ..plugins.models import SourceDescriptor, SourceTrait
@@ -79,6 +88,17 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
         rec.info("scraping started", content_type=str(content_type), crawlers=route)
         rec.update_summary(eligible_sites=[str(s) for s in route])
 
+        # 批次级跳过的来源 (扇出时注入): 建图前合并进 exclude, 并记为 SKIPPED —— 不触网、不计失败.
+        # 这样死站显示为「跳过」而非「失败」, 也省掉建图后对其节点的无谓请求 (配合熔断器的请求级短路).
+        disabled = {str(s) for s in (payload.disabled_sources or ())}
+        if disabled:
+            route_set = {str(s) for s in route}
+            for site in disabled:
+                if site in route_set:
+                    rec.record_site_outcome(
+                        site=site, outcome=SiteOutcomeKind.SKIPPED, reason=FailureReason.CIRCUIT_OPEN
+                    )
+
         crawlers = await self._factory.get_crawlers(route)
         if not crawlers:
             current().warning("no crawlers available", requested=route)
@@ -101,7 +121,9 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
         )
 
         field_priority = compile_priority(
-            route, self._config.scraping.field_priority, self._config.scraping.field_blacklist
+            route,
+            self._config.scraping.field_priority,
+            self._merge_exclude(self._config.scraping.field_blacklist, disabled),
         )
         field_language = self._config.scraping.field_language
 
@@ -123,8 +145,14 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
             deferred_sites=frozenset(name for name in crawlers if name in self._partial_sources),
         )
 
-        # 站点结果已由引擎 _fetch_one 逐条上报到 summary.outcomes; 这里只记录调度顺序.
-        rec.update_summary(sites_queried=list(result.sites_queried))
+        # 站点结果已由引擎 _fetch_one 逐条上报到 summary.outcomes; 这里把被跳过的来源 (disabled) 也补登进
+        # sites_queried, 让它在结果里显示为 SKIPPED 而非「遗漏」—— 它们本在 route 中, 只是建图时被排除未触网.
+        queried = list(result.sites_queried)
+        route_ids = {str(s) for s in route}
+        for site in sorted(disabled):
+            if site in route_ids and site not in queried:
+                queried.append(site)
+        rec.update_summary(sites_queried=queried)
 
         # 标量可以全空: 只要有来源返回结果, 海报 / 评分 / external_id 仍可入库.
         if not result.raw:
@@ -228,6 +256,33 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
             ),
             followups=[*actor_followups, *organize_followups],
         )
+
+    @staticmethod
+    def _merge_exclude(
+        field_blacklist: Mapping[MetadataField, Sequence[SiteName]] | None,
+        disabled: set[str],
+    ) -> dict[MetadataField, list[str]]:
+        """把批次级 ``disabled`` (全局禁用) 与配置级 ``field_blacklist`` (按字段禁用) 合并成 compile_priority 的 exclude.
+
+        全局禁用的站必须作用到 **每个** 字段 (否则会出现在未被 blacklist/prefer 覆盖的字段链上); 按字段的
+        blacklist 原样保留. 键用 ``MetadataField`` 枚举, 与 ``ALL_FIELDS`` 迭代对齐 (compile_priority 的
+        overrides 按此键索引).
+        """
+        merged: dict[MetadataField, list[str]] = {}
+        for field, sites in (field_blacklist or {}).items():
+            lst = [str(s) for s in sites]
+            if disabled:
+                lst.extend(d for d in disabled if d not in lst)
+            if lst:
+                merged[field] = lst
+        if disabled:
+            for field in ALL_FIELDS:
+                existing = merged.get(field)
+                if existing is None:
+                    merged[field] = list(disabled)
+                elif not all(d in existing for d in disabled):
+                    merged[field] = [*existing, *[d for d in disabled if d not in existing]]
+        return merged
 
     def failure_result(self, payload: ScrapePayload) -> ScrapeResult | None:
         """抓取之后崩掉时, 站点明细仍要能回答"为什么刮不到"."""

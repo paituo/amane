@@ -189,6 +189,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
         plugin_manager,
         library_locks=library_locks,
         inventory_store=inventory_store,
+        availability=stack.availability,
     )
 
     worker = AsyncWorker(
@@ -206,7 +207,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
     cron_scheduler = CronScheduler(repo)
     cron_task = asyncio.create_task(cron_scheduler.start())
 
-    feed_service = FeedService(repo, web_client)
+    feed_service = FeedService(repo, web_client, availability=stack.availability)
     feed_task = asyncio.create_task(feed_service.start())
 
     emitter_task: asyncio.Task[None] | None = None

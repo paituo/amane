@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
 from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
@@ -104,9 +105,13 @@ class ScrapePayload(BaseModel):
     content_type: ContentType = ContentType.CENSORED
     media_file_id: int | None = None
     use_cache: set[CacheKind] = {CacheKind.metadata, CacheKind.trans}
+    disabled_sources: set[str] = Field(default_factory=set)
+    """批次级探测判定不可用的来源 (source_id 集合); 注入聚合图作 skip: 不触网、不计失败."""
 
 
-def build_feed_scrape_payload(feed: Feed, number: str) -> ScrapePayload:
+def build_feed_scrape_payload(
+    feed: Feed, number: str, disabled_sources: Iterable[str] | None = None
+) -> ScrapePayload:
     content_type = feed.content_type or infer_content_type(number)
 
     use_cache: set[CacheKind] = set()
@@ -121,6 +126,7 @@ def build_feed_scrape_payload(feed: Feed, number: str) -> ScrapePayload:
         content_type=content_type,
         media_file_id=None,
         use_cache=use_cache,
+        disabled_sources=set(disabled_sources) if disabled_sources else set(),
     )
 
 
