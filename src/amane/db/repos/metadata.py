@@ -10,6 +10,7 @@ from ...enums import ActorGender, MetadataField
 from ...parsing import ContentType, Mosaic, infer_content_type
 from ...utils.collections import unique_ids
 from ...utils.text import normalize_long_text
+from ..indexing import MetadataIndexSink
 from ..models import (
     MediaFile,
     Metadata,
@@ -111,6 +112,19 @@ def _merge_auto_locks(fields: MetadataFields, locked: set[MetadataField]) -> lis
 
 
 class MetadataRepoMixin(RepositoryMixinBase):
+    index_sink: MetadataIndexSink | None
+
+    def _index_write(self, metadata_id: int | None) -> None:
+        """提交之后通知索引; 无 sink (检索关闭) 时是空操作."""
+        if self.index_sink is None or metadata_id is None:
+            return
+        self.index_sink.notify_write([metadata_id])
+
+    def _index_delete(self, metadata_ids: Sequence[int]) -> None:
+        if self.index_sink is None or not metadata_ids:
+            return
+        self.index_sink.notify_delete(metadata_ids)
+
     async def list_metadata(
         self,
         keyword: str | None = None,
@@ -224,6 +238,22 @@ class MetadataRepoMixin(RepositoryMixinBase):
         async with self._session() as session:
             return await session.get(Metadata, metadata_id)
 
+    async def get_metadata_many(self, metadata_ids: Sequence[int]) -> dict[int, Metadata]:
+        """批量取行, 供索引侧回填与批量 upsert 使用. 不存在的 id 不在结果里."""
+        unique = list(dict.fromkeys(metadata_ids))
+        if not unique:
+            return {}
+        async with self._session() as session:
+            stmt = select(Metadata).where(col(Metadata.id).in_(unique))
+            rows = (await session.exec(stmt)).all()
+            return {row.id: row for row in rows if row.id is not None}
+
+    async def all_metadata_ids(self) -> list[int]:
+        """全库 id (升序). 回填做差集用; 只取主键, 不水合实体."""
+        async with self._session() as session:
+            stmt = select(col(Metadata.id)).order_by(col(Metadata.id).asc())
+            return [row for row in (await session.exec(stmt)).all() if row is not None]
+
     async def get_metadata_by_number(self, number: str) -> Metadata | None:
         """大小写不敏感; 返回行保留库内原始大小写."""
         async with self._session() as session:
@@ -276,6 +306,7 @@ class MetadataRepoMixin(RepositoryMixinBase):
                 await sync_metadata_facets(session, existing)
                 await session.commit()
                 await session.refresh(existing)
+                self._index_write(existing.id)
                 return existing
             meta = Metadata(number=number, content_type=content_type or infer_content_type(number), **fields)
             session.add(meta)
@@ -285,6 +316,7 @@ class MetadataRepoMixin(RepositoryMixinBase):
             await sync_metadata_facets(session, meta)
             await session.commit()
             await session.refresh(meta)
+            self._index_write(meta.id)
             return meta
 
     async def update_metadata(
@@ -353,6 +385,7 @@ class MetadataRepoMixin(RepositoryMixinBase):
             await sync_metadata_facets(session, metadata)
             await session.commit()
             await session.refresh(metadata)
+            self._index_write(metadata.id)
             return metadata
 
     async def set_metadata_locks(self, metadata_id: int, fields: Collection[MetadataField]) -> Metadata | None:
@@ -376,19 +409,23 @@ class MetadataRepoMixin(RepositoryMixinBase):
                 return False
             await cascade_delete_metadata(session, metadata)
             await session.commit()
-            return True
+        self._index_delete([metadata_id])
+        return True
 
     async def batch_delete_metadata(self, ids: list[int]) -> tuple[int, int]:
         """级联与 :meth:`delete_metadata` 一致, 单个事务. 不存在的 id 计入 missing."""
         async with self._session() as session:
             deleted = 0
             missing = 0
+            removed: list[int] = []
             for metadata_id in ids:
                 metadata = await session.get(Metadata, metadata_id)
                 if metadata is None:
                     missing += 1
                     continue
                 await cascade_delete_metadata(session, metadata)
+                removed.append(metadata_id)
                 deleted += 1
             await session.commit()
-            return deleted, missing
+        self._index_delete(removed)
+        return deleted, missing

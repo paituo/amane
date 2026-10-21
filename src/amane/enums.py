@@ -176,3 +176,18 @@ class WatermarkCorner(StrEnum):
     TOP_RIGHT = "top_right"
     BOTTOM_LEFT = "bottom_left"
     BOTTOM_RIGHT = "bottom_right"
+
+
+class SearchMode(StrEnum):
+    """本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.
+
+    定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方
+    (路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed).
+    """
+
+    LIKE = "like"
+    """未启用任何索引路径, 走原有子串扫描."""
+
+    KEYWORD = "keyword"
+    VECTOR = "vector"
+    HYBRID = "hybrid"

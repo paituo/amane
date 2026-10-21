@@ -761,6 +761,81 @@
         "description": "同时保留的会话历史上限 (LRU)"
       }
     },
+    "search": {
+      "keyword_enabled": {
+        "label": "关键词检索",
+        "description": "倒排索引, 覆盖番号/标题/简介/演员/标签/系列/厂牌"
+      },
+      "vector_enabled": {
+        "label": "向量检索",
+        "description": "语义召回; 首次开启会下载模型并对全库回填, 属于显式动作"
+      },
+      "hybrid_enabled": {
+        "label": "混合检索",
+        "description": "两路同时开启时按相关度融合; 关闭则各自排序后拼接"
+      },
+      "vector_engine": {
+        "label": "向量引擎",
+        "description": "sqlite-vec 走原生扩展; python 为应用侧内积, 语料大了会明显变慢",
+        "options": {
+          "sqlite_vec": "sqlite-vec",
+          "python": "应用侧内积"
+        }
+      },
+      "embedding": {
+        "label": "嵌入模型",
+        "description": "两种实现同一协议; 换实现不改变向量的存储格式",
+        "provider": {
+          "label": "嵌入实现",
+          "description": "内嵌为进程内 ONNX 推理; OpenAI 兼容指向任意 /v1/embeddings 端点",
+          "options": {
+            "fastembed": "内嵌 (fastembed)",
+            "openai_compatible": "OpenAI 兼容端点"
+          }
+        },
+        "model": {
+          "label": "模型",
+          "description": "内嵌填 fastembed 模型名; HTTP 时原样作为 model 字段发出"
+        },
+        "dim": {
+          "label": "向量维度",
+          "description": "必须与模型实际维度一致, 不符时嵌入直接报错"
+        },
+        "base_url": {
+          "label": "端点地址",
+          "description": "仅 OpenAI 兼容实现使用, 末尾 /embeddings 由程序追加"
+        },
+        "api_key": {
+          "label": "API Key"
+        },
+        "batch_size": {
+          "label": "批大小"
+        },
+        "timeout_s": {
+          "label": "超时 (秒)"
+        },
+        "threads": {
+          "label": "推理线程数",
+          "description": "仅内嵌使用; 留空交给 onnxruntime 默认"
+        }
+      },
+      "fusion": {
+        "label": "融合",
+        "description": "关键词命中与语义相似度如何合成一个顺序",
+        "zgate": {
+          "label": "语义门控",
+          "description": "余弦相似度的 z 分数低于此值判为未命中; 语料少于 300 条时几乎必定门掉语义结果"
+        },
+        "word_weight": {
+          "label": "词命中加分",
+          "description": "关键词命中的固定加分; 番号精确命中另有一层, 不受此值影响"
+        },
+        "vector_k": {
+          "label": "向量召回上限",
+          "description": "翻页深度超过它就没有可信顺序了"
+        }
+      }
+    },
     "r18": {
       "dsn": {
         "label": "PostgreSQL 连接串",

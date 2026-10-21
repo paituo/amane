@@ -681,6 +681,83 @@ class LLMConfig(BaseModel):
         return {field: text.strip() for field, text in value.items() if text.strip()}
 
 
+class EmbeddingProviderName(StrEnum):
+    """嵌入实现. 两者对上层同协议, 换实现不改变索引存储格式."""
+
+    FAST_EMBED = "fastembed"
+    """进程内 ONNX 推理, 无外部服务依赖; 首次使用下载模型."""
+
+    OPENAI_COMPATIBLE = "openai_compatible"
+    """标准 ``POST {base_url}/embeddings``, 可指向 Ollama / llama.cpp / TEI 等."""
+
+
+class VectorEngine(StrEnum):
+    """向量索引后端."""
+
+    SQLITE_VEC = "sqlite_vec"
+    """``vec0`` 虚表, 需在独立连接上加载原生扩展."""
+
+    PYTHON = "python"
+    """应用侧内积, 零扩展; 扩展不可用时的回退."""
+
+
+class EmbeddingConfig(BaseModel):
+    """嵌入端点配置. 与 llm / agent section 隔离, 凭据不共用."""
+
+    provider: EmbeddingProviderName = EmbeddingProviderName.FAST_EMBED
+    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    """内嵌时是 fastembed 模型名, HTTP 时原样作为 ``model`` 字段发出."""
+
+    dim: int = Field(default=384, ge=8, le=8192)
+    """必须与模型实际维度一致; 不符时嵌入直接报错而不是静默降级."""
+
+    base_url: str = "http://127.0.0.1:11434/v1"
+    """仅 ``openai_compatible`` 使用; 末尾 ``/embeddings`` 由代码追加."""
+
+    api_key: str | None = None
+    batch_size: int = Field(default=16, ge=1, le=256)
+    timeout_s: float = Field(default=30.0, ge=1.0, le=600.0)
+    threads: int | None = Field(default=None, ge=1, le=64)
+    """仅内嵌使用; 空表示交给 onnxruntime 默认 (通常等于物理核数)."""
+
+
+class FusionConfig(BaseModel):
+    """关键词与向量的融合参数."""
+
+    zgate: float = Field(default=2.0, ge=0.0, le=10.0)
+    """语义门控: 余弦相似度的 z 分数低于此值判为"未命中", 避免硬塞低分结果."""
+
+    word_weight: float = Field(default=2.0, ge=0.0, le=10.0)
+    """关键词命中的加分权重; 精确实体 (番号/人名) 不应被语义门控滤掉."""
+
+    vector_k: int = Field(default=200, ge=1, le=5000)
+    """向量路召回上限. 融合后取前 limit 条, 因此应显著大于翻页上限."""
+
+
+class SearchConfig(BaseModel):
+    """检索开关与参数. 三个开关正交, 全关等价于旧行为."""
+
+    keyword_enabled: bool = True
+    vector_enabled: bool = False
+    """默认关闭: 首次开启会下载模型并对全库回填向量, 属于显式动作."""
+
+    hybrid_enabled: bool = True
+    """是否走 z-gate 融合. 只在两路同时开启时起作用, 判据见 ``fused``; 关闭则两路各自排序后拼接.
+
+    **保留用户意图, 不因暂时没有向量路而改写这个值**: 早先的 ``after`` 校验器会在
+    ``vector_enabled=False`` 时把它改成 False 并落盘, 之后用户再打开向量也拿不到融合.
+    """
+
+    vector_engine: VectorEngine = VectorEngine.SQLITE_VEC
+    embedding: EmbeddingConfig = EmbeddingConfig()
+    fusion: FusionConfig = FusionConfig()
+
+    @property
+    def fused(self) -> bool:
+        """本次检索是否真的会融合. 两路都开且用户要融合, 才是 ``SearchMode.HYBRID`` 的融合分支."""
+        return self.hybrid_enabled and self.keyword_enabled and self.vector_enabled
+
+
 class AgentThinkingMode(StrEnum):
     """会话可覆盖; 全局为新建会话的回退默认."""
 
@@ -814,6 +891,7 @@ class HotSettings(BaseModel):
     sr: SrConfig = SrConfig()
     watermark: WatermarkConfig = WatermarkConfig()
     llm: LLMConfig = LLMConfig()
+    search: SearchConfig = SearchConfig()
     r18: R18Config = R18Config()
     watcher: WatcherConfig = WatcherConfig()
     everything: EverythingConfig = EverythingConfig()

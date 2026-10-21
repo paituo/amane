@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any
 import httpx2 as httpx
 import structlog
 
-from ..config import R18Config
+from ..config import EmbeddingProviderName, R18Config
 from ..crawlers import actor_registry, registry
 from ..crawlers.base import CrawlerProfile
 from ..crawlers.factory import CrawlerFactory
@@ -41,12 +41,22 @@ from ..playback import PlaybackFactory, PlaybackState
 from ..plugins.manager import PluginManager
 from ..plugins.packaging import install_plugin_path, install_plugin_zip, uninstall_plugin_tree
 from ..scheduler.worker import MAIN_LOOP_STOP_TIMEOUT, AsyncWorker
+from ..search import (
+    EmbeddingProvider,
+    FastEmbedProvider,
+    MetadataIndexer,
+    OpenAICompatibleProvider,
+    SearchService,
+    SearchStore,
+    WarmableProvider,
+    fastembed_available,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from ..agent import AgentService
-    from ..config import BrowserConfig, ConfigManager, HotSettings
+    from ..config import BrowserConfig, ConfigManager, EmbeddingConfig, HotSettings, SearchConfig
     from ..db.repository import Repository
     from ..events import EventBus
     from ..handlers.protocol import TaskHandler
@@ -192,6 +202,139 @@ class R18Handle:
     closed: bool = False
 
 
+def build_embedding_provider(hot: HotSettings, cache_dir: Path | None = None) -> EmbeddingProvider | None:
+    """按配置构造嵌入 provider; 向量路关闭或实现缺席时返回 None.
+
+    fastembed 是可选 extra: 该分发不含它时**不构造**而不是抛错 —— 搜索栈据此把向量路标成
+    ``degraded``, 关键词路照常可用; 让启动失败于一个可以降级的能力是不划算的.
+    """
+    if not hot.search.vector_enabled:
+        return None
+    embedding = hot.search.embedding
+    if embedding.provider is EmbeddingProviderName.OPENAI_COMPATIBLE:
+        return OpenAICompatibleProvider(
+            base_url=embedding.base_url,
+            model=embedding.model,
+            dim=embedding.dim,
+            api_key=embedding.api_key,
+            batch_size=embedding.batch_size,
+            timeout_s=embedding.timeout_s,
+        )
+    if not fastembed_available():
+        logger.warning(
+            "内嵌嵌入不可用, 向量路降级",
+            reason="当前分发未包含 fastembed",
+            hint="安装 amane[vector] 或把 search.embedding.provider 改为 openai_compatible",
+        )
+        return None
+    return FastEmbedProvider(
+        model=embedding.model,
+        dim=embedding.dim,
+        cache_dir=cache_dir,
+        threads=embedding.threads,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ReusedEmbedding:
+    """从旧栈接管来的 provider 及其预热任务.
+
+    重载模型是唯一昂贵的部分 (热 1.8s, 冷要下权重). 改融合参数、改词索引开关都不该付这笔钱,
+    所以 ``embedding`` 子配置没变时把 provider 整体移交, 只换掉依赖配置的 service / indexer.
+    """
+
+    provider: EmbeddingProvider
+    warm_task: asyncio.Task[None] | None = None
+
+
+@dataclass(eq=False)
+class SearchStack:
+    """检索的会话级装配. 开关全关时组合根不构造它, 写入与查询都退回旧路径."""
+
+    store: SearchStore
+    provider: EmbeddingProvider | None
+    service: SearchService
+    indexer: MetadataIndexer
+    embedding_key: EmbeddingConfig
+    """构造本栈时用的嵌入配置. 判断 provider 能否跨重建复用, 只看这一段是否相等."""
+    _warm_task: asyncio.Task[None] | None = field(default=None, repr=False)
+
+    def start_warmup(self) -> None:
+        """在"配置启用"这一刻开始预热模型, 而不是等首个搜索请求.
+
+        冷启动要下约 150MB 权重 (实测 53s), 挂在请求上就是一个必然超时的查询. 预热是后台任务:
+        不阻塞配置保存, 未就绪期间的查询由 ``SearchService`` 有界降级.
+        """
+        provider = self.provider
+        if provider is None or not isinstance(provider, WarmableProvider):
+            return
+        if self._warm_task is not None and not self._warm_task.done():
+            # 从旧栈接管的任务还在跑: 再起一个只会并发加载同一份权重.
+            return
+        self._warm_task = asyncio.create_task(provider.warmup(), name="search-warmup")
+
+    def detach_provider(self) -> ReusedEmbedding | None:
+        """把 provider 与预热任务交出去, 之后 ``aclose`` 不再碰它们. 没有可交的就返回 ``None``."""
+        provider = self.provider
+        if provider is None:
+            return None
+        task, self._warm_task = self._warm_task, None
+        self.provider = None
+        return ReusedEmbedding(provider=provider, warm_task=task)
+
+    async def aclose(self) -> None:
+        task, self._warm_task = self._warm_task, None
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                logger.warning("检索预热任务异常结束", exc_info=True)
+        await self.indexer.aclose()
+        await self.store.aclose()
+        if self.provider is not None:
+            await self.provider.aclose()
+
+
+def build_search(
+    hot: HotSettings,
+    repo: Repository,
+    db_path: Path,
+    data_dir: Path,
+    *,
+    reuse: ReusedEmbedding | None = None,
+) -> SearchStack | None:
+    """构造检索栈并注册写入 sink.
+
+    同步构造: ``SearchStore`` 只记路径, 建连在 ``open()`` 里; provider 亦然, 模型在首次使用时加载.
+    向量表是派生缓存, 与业务库分文件, 原因见 ``docs/dev/search.md``.
+    内嵌模型权重落在 ``data_dir/models``, 与 resources / translations.db 同处一地, 便于整体迁移与打包.
+    ``reuse`` 来自旧栈: 嵌入配置未变时直接接管, 不重新加载模型.
+    """
+    if not hot.search.keyword_enabled and not hot.search.vector_enabled:
+        return None
+    provider = reuse.provider if reuse is not None else build_embedding_provider(hot, data_dir / "models")
+    store = SearchStore(
+        db_path,
+        dim=hot.search.embedding.dim,
+        model=provider.model_id if provider is not None else f"none:{hot.search.embedding.model}",
+    )
+    service = SearchService(store=store, provider=provider, config=hot.search)
+    indexer = MetadataIndexer(store=store, repo=repo, config=hot.search, provider=provider)
+    stack = SearchStack(
+        store=store,
+        provider=provider,
+        service=service,
+        indexer=indexer,
+        embedding_key=hot.search.embedding.model_copy(deep=True),
+    )
+    stack._warm_task = reuse.warm_task if reuse is not None else None
+    return stack
+
+
 @dataclass(eq=False)
 class RetiringWorker:
     """已退役、正在排空的 worker 及其使用的 r18 句柄与浏览器池."""
@@ -227,9 +370,11 @@ class AppRuntime:
     inventory_store: InventoryStore = field(default_factory=InventoryStore)
     browser: BrowserPool | None = None
     r18_handle: R18Handle | None = None
+    search: SearchStack | None = None
 
     _r18_config: R18Config | None = field(default=None, repr=False)
     _browser_key: tuple[BrowserConfig, str | None] | None = field(default=None, repr=False)
+    _search_key: SearchConfig | None = field(default=None, repr=False)
     _rebuild_lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
     _retiring: list[RetiringWorker] = field(default_factory=list, repr=False)
     _retire_tasks: set[asyncio.Task[None]] = field(default_factory=set, repr=False)
@@ -242,6 +387,8 @@ class AppRuntime:
         if self.r18_handle is None and self.r18_db is not None:
             self.r18_handle = R18Handle(self.r18_db)
         self._browser_key = self._current_browser_key()
+        if self._search_key is None:
+            self._search_key = self.config.hot.search.model_copy(deep=True)
 
     def _current_browser_key(self) -> tuple[BrowserConfig, str | None]:
         """浏览器池的生命周期键: 任一变化都需要换新引擎 (代理与超时参与启动与单次渲染)."""
@@ -379,6 +526,8 @@ class AppRuntime:
 
     async def _apply_rebuild_unlocked(self) -> None:
         """必须持有 ``_rebuild_lock``."""
+        previous_search = self.search
+        await self._replace_search_if_needed()
         old_playback = self.playback_factory
         old_worker = self.worker
         old_r18 = self.r18_handle
@@ -391,6 +540,57 @@ class AppRuntime:
             logger.warning("workers retiring", count=len(self._retiring))
         if old_playback is not None:
             await old_playback.aclose()
+        if previous_search is not None and previous_search is not self.search:
+            # 新栈的 sink 已就位才关旧栈: 中间不留没人在听的窗口.
+            await previous_search.aclose()
+
+    async def _replace_search_if_needed(self) -> None:
+        """``hot.search`` 变了才重建检索栈. 旧栈由调用方在 close 段关闭.
+
+        不放进同步的 ``_rebuild``: 建连与加载都要 await, 而 ``_rebuild`` 不允许 await.
+
+        嵌入配置没变时把 provider (连同一个还在跑的预热任务) 移交给新栈: 否则改一个
+        ``fusion.zgate`` 也要重新加载模型, 代价远大于重建本身.
+        """
+        desired = self.config.hot.search
+        if desired == self._search_key:
+            return
+        reuse = self._take_reusable_embedding(desired)
+        stack = build_search(
+            self.config.hot,
+            self.repo,
+            self.config.cold.db_path,
+            self.config.cold.data_dir,
+            reuse=reuse,
+        )
+        if stack is not None:
+            await stack.store.open()
+            # 开关刚被打开就是"配置启用时": 模型下载从这里开始, 不等首个查询.
+            stack.start_warmup()
+            stack.indexer.start()
+            stack.indexer.start_backfill()
+        self.search = stack
+        self.repo.set_index_sink(stack.indexer if stack is not None else None)
+        self._search_key = desired.model_copy(deep=True)
+        logger.info(
+            "search stack rebuilt",
+            keyword=desired.keyword_enabled,
+            vector=desired.vector_enabled,
+            engine=str(desired.vector_engine),
+            reused_embedding=reuse is not None,
+        )
+
+    def _take_reusable_embedding(self, desired: SearchConfig) -> ReusedEmbedding | None:
+        """能接管就接管. 判据只有一条: 嵌入子配置逐字段相等 (含 model/dim/provider/threads).
+
+        向量路被关掉时不接管: 新栈的 provider 本来就该是 ``None``, 留着模型占内存没有意义.
+        """
+        stack = self.search
+        if stack is None or not desired.vector_enabled:
+            return None
+        if stack.embedding_key != desired.embedding:
+            return None
+        return stack.detach_provider()
 
     def _retire_worker(self, worker: AsyncWorker, r18: R18Handle | None, browser: BrowserPool | None) -> None:
         entry = RetiringWorker(worker=worker, r18=r18, browser=browser)

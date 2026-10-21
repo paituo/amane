@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, cast
 
 import structlog
@@ -5,9 +6,10 @@ from fastapi import APIRouter, HTTPException, Query
 from pydantic import TypeAdapter
 
 from ...aggregate import compute_merge_updates
-from ...db.models import MetadataSortField, SavedQueryEntity, SortOrder, TaskType
+from ...db.models import Metadata, MetadataSortField, SavedQueryEntity, SortOrder, TaskType
 from ...db.repo_types import WriteMode
 from ...db.repos.media import file_phase_of
+from ...enums import SearchMode
 from ...handlers import ScrapePayload
 from ...media import manual_crop_image
 from ...parsing import DEFINITION_VALUES, ContentType, Mosaic, summarize_file_phases
@@ -37,11 +39,19 @@ from ..models import (
 from .saved_queries import resolve_saved_query_id_subquery
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
+    from ...app.runtime import AppRuntime
     from ...db.repo_types import MetadataFields
+    from ...db.repository import Repository
+    from ...search import SearchResult
 
 logger = structlog.get_logger()
 
 router = APIRouter(prefix="/metadata", tags=["metadata"])
+
+#: 搜索前等待索引排空的上限 (秒). 换取"读己之写", 但不能让搜索陪着批量刮削跑完嵌入.
+INDEX_WAIT_S = 1.5
 
 
 def _file_phase_resp(summary: ParsedFilePhase) -> FilePhaseSummary:
@@ -62,6 +72,65 @@ def _require_known_definition(definition: str | None) -> str | None:
     return definition
 
 
+@dataclass(frozen=True)
+class MetadataFilters:
+    """列表端点除检索外的全部筛选条件, 两条路径共用一份, 避免参数在路由里复制两遍."""
+
+    sort_by: MetadataSortField
+    order: SortOrder
+    actor_ids: Sequence[int] | None = None
+    director_ids: Sequence[int] | None = None
+    tag_ids: Sequence[int] | None = None
+    studio_ids: Sequence[int] | None = None
+    publisher_ids: Sequence[int] | None = None
+    series_ids: Sequence[int] | None = None
+    user_tag_ids: Sequence[int] | None = None
+    has_files: bool | None = None
+    has_subtitle: bool | None = None
+    vr: bool | None = None
+    mosaic: Mosaic | None = None
+    uncensored: bool | None = None
+    definition: str | None = None
+    content_type: ContentType | None = None
+    id_subquery_sql: str | None = None
+
+
+async def _ranked_search(runtime: AppRuntime, query: str | None, *, offset: int, limit: int) -> SearchResult | None:
+    """走索引时的候选 id (按相关度). 无索引或未启用时返回 None, 调用方退回子串扫描."""
+    if not query:
+        return None
+    stack = runtime.search
+    if stack is None:
+        return None
+    # 写入是异步索引的, 这里等一小会儿换取"读己之写"; 积压太深就按现有索引返回.
+    await stack.indexer.wait_idle(INDEX_WAIT_S)
+    # 翻页深度不能超过召回窗口: 向量路只保证 window 内有序, 再往后没有可信顺序.
+    window = stack.service.recall_window
+    return await stack.service.search(query, limit=min(offset + limit, window))
+
+
+async def _ranked_page(
+    repo: Repository,
+    ranked: SearchResult,
+    filters: MetadataFilters,
+    *,
+    offset: int,
+    limit: int,
+) -> MetadataListResponse:
+    """候选 id 已按相关度排好; 这里只做"与其它筛选求交 + 分页", 不再排序.
+
+    ``total`` 是**过筛选后的候选数**, 受召回窗口限制而不是全库精确计数 —— 与 ``KEYWORD`` 模式
+    的语义差异由 ``search_mode`` 对外声明, 见 ``docs/dev/search.md``.
+    """
+    if not ranked.ids:
+        return MetadataListResponse(items=[], total=0, search_mode=ranked.mode, search_degraded=ranked.degraded)
+    items, _ = await _fetch_metadata(repo, filters, ids=ranked.ids, offset=0, limit=len(ranked.ids))
+    position = {metadata_id: index for index, metadata_id in enumerate(ranked.ids)}
+    items.sort(key=lambda m: position.get(m.id or 0, len(position)))
+    page = items[offset : offset + limit]
+    return await _list_response(repo, page, total=len(items), mode=ranked.mode, degraded=ranked.degraded)
+
+
 @router.get("/schema")
 async def get_metadata_schema() -> dict:
     return TypeAdapter(PartialMetadata).json_schema()
@@ -70,6 +139,7 @@ async def get_metadata_schema() -> dict:
 @router.get("")
 async def list_metadata(
     repo: RepoDep,
+    runtime: RuntimeDep,
     search: Annotated[str | None, Query()] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
@@ -99,10 +169,9 @@ async def list_metadata(
     id_subquery_sql = None
     if saved_query_id is not None:
         id_subquery_sql = await resolve_saved_query_id_subquery(repo, saved_query_id, SavedQueryEntity.METADATA)
-    items, total = await repo.list_metadata(
-        keyword=search,
-        offset=offset,
-        limit=limit,
+
+    ranked = await _ranked_search(runtime, search, offset=offset, limit=limit)
+    filters = MetadataFilters(
         sort_by=sort_by,
         order=order,
         actor_ids=actor_id,
@@ -121,7 +190,56 @@ async def list_metadata(
         content_type=content_type,
         id_subquery_sql=id_subquery_sql,
     )
-    summaries = await repo.summarize_media_by_metadata(items)
+    if ranked is not None:
+        return await _ranked_page(repo, ranked, filters, offset=offset, limit=limit)
+
+    items, total = await _fetch_metadata(repo, filters, ids=None, offset=offset, limit=limit, keyword=search)
+    return await _list_response(repo, items, total=total, mode=SearchMode.LIKE)
+
+
+async def _fetch_metadata(
+    repo: Repository,
+    filters: MetadataFilters,
+    *,
+    ids: Sequence[int] | None,
+    offset: int,
+    limit: int,
+    keyword: str | None = None,
+) -> tuple[list[Metadata], int]:
+    return await repo.list_metadata(
+        keyword=keyword,
+        ids=ids,
+        offset=offset,
+        limit=limit,
+        sort_by=filters.sort_by,
+        order=filters.order,
+        actor_ids=filters.actor_ids,
+        director_ids=filters.director_ids,
+        tag_ids=filters.tag_ids,
+        studio_ids=filters.studio_ids,
+        publisher_ids=filters.publisher_ids,
+        series_ids=filters.series_ids,
+        user_tag_ids=filters.user_tag_ids,
+        has_files=filters.has_files,
+        has_subtitle=filters.has_subtitle,
+        vr=filters.vr,
+        mosaic=filters.mosaic,
+        uncensored=filters.uncensored,
+        definition=filters.definition,
+        content_type=filters.content_type,
+        id_subquery_sql=filters.id_subquery_sql,
+    )
+
+
+async def _list_response(
+    repo: Repository,
+    items: Sequence[Metadata],
+    *,
+    total: int,
+    mode: SearchMode,
+    degraded: bool = False,
+) -> MetadataListResponse:
+    summaries = await repo.summarize_media_by_metadata(list(items))
     responses: list[MetadataResponse] = []
     for m in items:
         summary = summaries.get(m.id) if m.id is not None else None
@@ -134,7 +252,7 @@ async def list_metadata(
                 }
             )
         responses.append(response)
-    return MetadataListResponse(items=responses, total=total)
+    return MetadataListResponse(items=responses, total=total, search_mode=mode, search_degraded=degraded)
 
 
 @router.post("/batch/delete")
