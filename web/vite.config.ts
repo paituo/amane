@@ -80,7 +80,10 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: process.env.VITE_API_URL || "http://localhost:8000",
+        // 必须写 127.0.0.1 而不是 localhost: 本机 `localhost` 的解析结果是 `::1` 在前、
+        // `127.0.0.1` 在后, 而后端 (`src/amane/server.py`) 只绑 IPv4. 用 localhost 时每个代理请求
+        // 都要先对 `::1` 失败一次, 冷启动期还会在日志里刷 `ECONNREFUSED` + `AggregateError`.
+        target: process.env.VITE_API_URL || "http://127.0.0.1:8000",
         changeOrigin: true,
         ws: true,
       },
