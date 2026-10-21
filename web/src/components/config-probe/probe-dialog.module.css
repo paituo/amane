@@ -1,0 +1,83 @@
+/*
+ * 测试日志区的样式.
+ *
+ * 只做两件事: 让"时间 / 级别 / 文案"三列对齐到能一眼扫过去, 以及让长错误串 (上游返回的
+ * JSON、连接异常堆栈) 换行而不是把对话框撑出横向滚动条.
+ *
+ * 颜色一律走 Mantine 变量 + light-dark(); 级别色只染图标, 不染整行 —— 满屏红字会让
+ * "一条 error + 三条 info"看起来像全盘失败.
+ */
+
+.log {
+  background: light-dark(var(--mantine-color-gray-0), var(--mantine-color-dark-8));
+  border: 1px solid var(--mantine-color-default-border);
+  border-radius: var(--mantine-radius-md);
+  padding: var(--mantine-spacing-xs) var(--mantine-spacing-sm);
+}
+
+.row {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--mantine-spacing-xs);
+  padding: 6px 0;
+}
+
+.row + .row {
+  border-top: 1px solid light-dark(var(--mantine-color-gray-2), var(--mantine-color-dark-6));
+}
+
+.elapsed {
+  flex: 0 0 4.25rem;
+  text-align: right;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-xs);
+  color: var(--mantine-color-dimmed);
+  padding-top: 2px;
+}
+
+.icon {
+  flex: 0 0 auto;
+  padding-top: 2px;
+}
+
+.icon[data-level="info"] {
+  color: var(--mantine-color-dimmed);
+}
+
+.icon[data-level="ok"] {
+  color: var(--mantine-color-teal-6);
+}
+
+.icon[data-level="warn"] {
+  color: var(--mantine-color-yellow-6);
+}
+
+.icon[data-level="error"] {
+  color: var(--mantine-color-red-6);
+}
+
+.body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.message {
+  font-size: var(--mantine-font-size-sm);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.detail {
+  margin: 4px 0 0;
+  font-family: var(--mantine-font-family-monospace);
+  font-size: var(--mantine-font-size-xs);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--mantine-color-dimmed);
+}
+
+.empty {
+  padding: var(--mantine-spacing-md) 0;
+  text-align: center;
+}

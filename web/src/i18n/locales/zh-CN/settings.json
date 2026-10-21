@@ -11,10 +11,26 @@
     "logging": "日志",
     "sr": "图像超分",
     "llm": "LLM 翻译",
-    "watermark": "水印"
+    "watermark": "水印",
+    "search": "检索",
+    "everything": "Everything 索引"
   },
   "config": {
     "loadError": "加载配置失败"
+  },
+  "probe": {
+    "action": "测试",
+    "title": "{{section}} · 配置测试",
+    "running": "测试中…",
+    "passed": "测试通过",
+    "failed": "测试失败",
+    "elapsed": "共 {{ms}} ms",
+    "rerun": "重新测试",
+    "copy": "复制日志",
+    "copied": "已复制",
+    "waiting": "等待第一步输出…",
+    "scopeHint": "使用当前表单里的值 (含未保存的修改); 只做检查, 不会保存配置",
+    "requestFailed": "请求失败: {{message}}"
   },
   "client": {
     "title": "客户端设置",

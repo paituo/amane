@@ -11,10 +11,26 @@
     "logging": "Logging",
     "sr": "Super Resolution",
     "llm": "LLM Translation",
-    "watermark": "Watermark"
+    "watermark": "Watermark",
+    "search": "Search",
+    "everything": "Everything Index"
   },
   "config": {
     "loadError": "Failed to load configuration"
+  },
+  "probe": {
+    "action": "Test",
+    "title": "{{section}} · Connection test",
+    "running": "Testing…",
+    "passed": "Passed",
+    "failed": "Failed",
+    "elapsed": "{{ms}} ms total",
+    "rerun": "Run again",
+    "copy": "Copy log",
+    "copied": "Copied",
+    "waiting": "Waiting for the first step…",
+    "scopeHint": "Runs against the values in this form (including unsaved edits). Nothing is saved.",
+    "requestFailed": "Request failed: {{message}}"
   },
   "client": {
     "title": "Client settings",
