@@ -7,6 +7,7 @@ import structlog
 
 from ..enums import ActorGender
 from ..net.connectivity import ConnectivityOutcome
+from ..net.errors import FailureReason, RequestError
 from ..plugins.models import SourceCapability, SourceDescriptor, SourceTrait
 from .http import HttpClient
 
@@ -28,6 +29,8 @@ class RequestContext:
 class CrawlerProfile:
     name: SiteName | str
     base_url: str
+    mirrors: list[str] = field(default_factory=list)
+    """同一后端的备用入口 (官方轮换域名). 仅在连接层失败时按顺序轮换, 页面结构须与 ``base_url`` 一致."""
     urls: list[str] = field(default_factory=list)
     cookies: dict[str, str] = field(default_factory=dict)
     headers: dict[str, str] = field(default_factory=dict)
@@ -50,9 +53,20 @@ class CrawlerProfile:
             name=str(self.name),
             version="builtin",
             capabilities=frozenset(self.effective_capabilities()),
-            urls=(*self.urls, self.base_url),
+            urls=(*self.mirrors, *self.urls, self.base_url),
             traits=frozenset(str(trait) for trait in self.traits),
         )
+
+
+_SWITCHABLE_REASONS = frozenset({FailureReason.NETWORK, FailureReason.TIMEOUT})
+"""换入口值得重试的失败原因: 只有连接层不可达才换.
+
+拦截页 / 年龄验证 / 4xx 换域无意义 (同一后端的镜像会给同样的回应), 换掉反而掩盖真实原因.
+"""
+
+
+def _switchable(exc: RequestError) -> bool:
+    return exc.reason in _SWITCHABLE_REASONS
 
 
 class Crawler(ABC):
@@ -75,6 +89,19 @@ class Crawler(ABC):
         self.cookies = dict(self._profile.cookies)
         self.headers = dict(self._profile.headers)
         self._resolve_config()
+        self._origins = self._build_origins()
+        self._origin_index = 0
+
+    def _build_origins(self) -> tuple[str, ...]:
+        """可用入口: 当前 ``base_url`` 在前, 备用入口按声明顺序; 去重并去掉尾斜杠."""
+        seen: set[str] = set()
+        origins: list[str] = []
+        for url in (self.base_url, *self._profile.mirrors):
+            normalized = url.rstrip("/")
+            if normalized and normalized not in seen:
+                seen.add(normalized)
+                origins.append(normalized)
+        return tuple(origins)
 
     def _resolve_config(self):
         if self.config is None:
@@ -95,6 +122,35 @@ class Crawler(ABC):
             return self._logger
 
     async def fetch(self, query: SearchQuery, options: FetchOptions | None = None) -> MediaMetadata | None:
+        """按可用入口取一次; 连接层失败时换下一个入口, 并记住成功的那个.
+
+        记住成功入口是必要的: 否则每个文件都要先撞一次主域超时 (javdb 主域被墙时是 37 s/文件).
+        """
+        # 未走 __init__ 的 duck-typed 爬虫 (测试替身) 没有入口信息: 退化为单入口, 行为与无镜像一致.
+        origins = getattr(self, "_origins", None) or ()
+        attempts = 0
+        while True:
+            if origins:
+                index = getattr(self, "_origin_index", 0)
+                if index >= len(origins):
+                    index = 0
+                self.base_url = origins[index]
+            try:
+                return await self._fetch_once(query, options)
+            except RequestError as exc:
+                attempts += 1
+                if not origins or attempts >= len(origins) or not _switchable(exc):
+                    raise
+                self._origin_index = (index + 1) % len(origins)
+                self.logger.warning(
+                    "mirror unreachable, trying next",
+                    number=query.number,
+                    failed=origins[index],
+                    next=origins[self._origin_index],
+                    error=exc.message,
+                )
+
+    async def _fetch_once(self, query: SearchQuery, options: FetchOptions | None = None) -> MediaMetadata | None:
         number = query.number
         lang = options.language if options else None
         t0 = time.monotonic()

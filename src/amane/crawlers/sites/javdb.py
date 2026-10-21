@@ -28,7 +28,13 @@ def _parse_actors(html: Selector) -> list[FilmActor]:
 class JavDBCrawler(Crawler):
     @classmethod
     def profile(cls) -> CrawlerProfile:
-        return CrawlerProfile(name=SiteName.JAVDB, base_url="https://javdb.com")
+        return CrawlerProfile(
+            name=SiteName.JAVDB,
+            base_url="https://javdb.com",
+            # 官方轮换域名, 与主域同一后端: 2026-10 实测搜索页返回同一批 /v/ 条目 (页面体积一致).
+            # 国内直连可用 (570 约 0.9 s), 主域在无代理时是 TCP 黑洞, 换这几个可免代理.
+            mirrors=["https://javdb570.com", "https://javdb580.com"],
+        )
 
     async def _search(self, query: SearchQuery, options: FetchOptions | None = None) -> str | None:
         """结果番号取自条目声明的 ``div.video-title/strong``, 与入参同一部才命中.

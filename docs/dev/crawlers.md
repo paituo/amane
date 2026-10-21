@@ -33,6 +33,17 @@ CrawlerFactory (缓存实例)
 
 `crawlers/base.py::Crawler` 是 Template Method: 公开 `fetch()` (负责日志; HTTP / 拦截失败冒泡 `SourceError`), 子类实现 `_search` (番号 → URL) 与 `_scrape` (URL → `MediaMetadata`); 特殊源可直接 override `fetch()`. `profile()` 类方法给出内置来源 ID / `base_url` / 能力与性别 / 可选 cookies 与限速 URL; `__init__` 在 `profile()` 之后自动合并配置, 子类不得再次调用. 外部来源不要求继承 `Crawler`, 契约见 [plugins.md](plugins.md).
 
+## 备用入口 (mirror)
+
+`CrawlerProfile.mirrors` 声明同一后端的官方轮换域名 (如 javdb 的 `javdb570.com` / `javdb580.com`). `Crawler` 把它们与 `base_url` 组成入口池, 实际请求仍只用 `self.base_url`, 由 `fetch()` 在**连接层失败**时按池顺序换域:
+
+- 只有 `NETWORK` / `TIMEOUT` 才换. 拦截页、年龄验证、4xx/5xx 换域无意义 (同一后端的镜像会给同样的回应), 换掉反而掩盖真实原因.
+- 成功入口会被记住 (`_origin_index`), 后续请求直接从它开始; 否则每个文件都要先撞一次主域超时 (javdb 主域在无代理时是 TCP 黑洞, 37 s/文件).
+- `site_config.base_url` 仍是最高优先级, 它排在入口池首位.
+- mirrors 会进 `to_descriptor().urls`, 因此限速器与站点代理覆盖都认得镜像 host.
+
+新增入口前必须实测结构一致: **同一搜索词返回同一批条目 ID** 才能确认是同一后端; 仅首页 200 不够 (可能是挑战页或仿冒站).
+
 ## 连通性探测
 
 `Crawler.check_connectivity` / `ActorCrawler.check_connectivity` 是「网络检测」页的逐来源探测点, 缺省 GET `base_url` 并带上已合并的 cookies 与 headers, 与刮削同用一条 HTTP 通道 (代理 / 指纹 / 限速 / 同源 Referer), 判定复用 `net/errors.py` 的拦截分类. **实际入口不是 `base_url` 的来源必须覆盖它**, 否则会把「入口 404 / 是 API 端点」误报成不可达; 缺凭据的来源返回 `SKIPPED` 并给出 `SkipReason`. 探测是单次尝试 (重试只会把同一个结论拖长), 编排与端点见 [api.md](api.md) 的 `/network/check`.
