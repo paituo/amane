@@ -27,6 +27,11 @@ def schema_template() -> Path:
             conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
             conn.execute("VACUUM")
             conn.commit()
+            # 模板必须先落成 WAL: 拷贝出的库沿用文件头里的日志模式, 而连接级 PRAGMA
+            # journal_mode=WAL 只有在模式不同时才真正切换, 切换需要独占锁. 模板若是 delete
+            # 模式, 并发建连的每个连接都抢一次切换, 抢输的连接之后写入报 readonly.
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         finally:
             conn.close()
         _template = path
