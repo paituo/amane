@@ -539,10 +539,10 @@ class TestCircuitBreaker:
 
     @pytest.mark.asyncio
     async def test_curl_error_is_fail_fast_and_records_failure(self, monkeypatch: pytest.MonkeyPatch):
-        """连接错误立即 fail-fast (不重试), 且记失败 → 跨请求开路."""
+        """代理侧连接错误 (curl 7) 立即 fail-fast (不重试), 且记失败 → 跨请求开路."""
         breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
         client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
-        session = _RaisingStubSession(CurlError("connect refused"))
+        session = _RaisingStubSession(CurlError("connect refused", 7))
         monkeypatch.setattr(client, "_session", session)
         monkeypatch.setattr(asyncio, "sleep", _no_sleep)
 
@@ -600,3 +600,81 @@ class TestCircuitBreaker:
         resp = await client.request("GET", "https://www.dmm.co.jp/x")
         assert resp.status_code == 200
         assert len(session.calls) == 1
+
+
+class TestConnectivityBlame:
+    """连接级失败的归因: 代理侧错误码连带记录 proxy 锁, 站点侧错误仅记录 host 锁.
+
+    约束来自实测: official 站的 10s 超时被计入共享 ``proxy:`` 锁, 两次即开路, 随后
+    dmm/javdb/javbus 全部 ``CIRCUIT_OPEN`` 短路, 333 个失败任务中 321 个未发出任何请求.
+    """
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("exc", "proxy_open"),
+        [
+            (CurlError("timeout", 28), False),
+            (CurlError("ssl closed abruptly", 35), False),
+            (CurlError("empty reply", 52), False),
+            (CurlError("recv failure", 56), False),
+            (TimeoutError(), False),
+            (CurlError("proxy refused", 7), True),
+            (CurlError("resolve proxy", 5), True),
+            (CurlError("resolve host", 6), True),
+        ],
+    )
+    async def test_proxy_lock_only_blames_proxy_side_codes(
+        self, monkeypatch: pytest.MonkeyPatch, exc: BaseException, proxy_open: bool
+    ):
+        breaker = ConnectivityBreaker(proxy_fail_max=1, host_fail_max=99)
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        monkeypatch.setattr(client, "_session", _RaisingStubSession(exc))
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+        with pytest.raises(RequestError):
+            await client.request("GET", "https://www.dmm.co.jp/x", max_attempts=1)
+
+        assert breaker.is_open("proxy:http://127.0.0.1:7890") is proxy_open
+
+    @pytest.mark.asyncio
+    async def test_site_timeouts_open_host_lock_only(self, monkeypatch: pytest.MonkeyPatch):
+        """连续超时只开 host 锁: 第三个请求被短路, 但 proxy 锁仍关闭, 其它站不受影响."""
+        breaker = ConnectivityBreaker(proxy_fail_max=1, host_fail_max=2)
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _RaisingStubSession(CurlError("timeout", 28))
+        monkeypatch.setattr(client, "_session", session)
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+        for _ in range(2):
+            with pytest.raises(RequestError):
+                await client.request("GET", "https://www.official.example/x", max_attempts=1)
+        assert breaker.is_open("host:www.official.example") is True
+        assert breaker.is_open("proxy:http://127.0.0.1:7890") is False
+
+        with pytest.raises(RequestError) as exc:
+            await client.request("GET", "https://www.official.example/x", max_attempts=1)
+        assert exc.value.reason == FailureReason.CIRCUIT_OPEN
+        assert len(session.calls) == 2  # 第三次未触网
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("status", [404, 503])
+    async def test_http_status_response_releases_half_open_probe(self, monkeypatch: pytest.MonkeyPatch, status: int):
+        """探针拿到 4xx/5xx 也证明链路健康, 必须复位.
+
+        否则 key 停在 HALF_OPEN —— 该态 ``is_open`` 恒 True, 该维度会一直短路到进程重启.
+        """
+        breaker = ConnectivityBreaker(proxy_fail_max=1, proxy_cooldown_s=0.0)
+        proxy_key = "proxy:http://127.0.0.1:7890"
+        await breaker.record_failure(proxy_key)
+
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _StubSession(_StubResponse(status=status))
+        monkeypatch.setattr(client, "_session", session)
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+        with pytest.raises(RequestError):
+            await client.request("GET", "https://www.dmm.co.jp/x", max_attempts=1)
+
+        assert len(session.calls) == 1
+        assert breaker.state(proxy_key) is BreakerState.CLOSED
+        assert breaker.is_open(proxy_key) is False

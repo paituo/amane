@@ -27,6 +27,12 @@ class TaskResult[R: BaseModel | dict]:
     result: R | None = None
     error: str | None = None
     followups: list[FollowupTask] = field(default_factory=list)
+    retryable: bool = False
+    """失败是否属于环境性, 应由调度器退避重排.
+
+    仅 ``success=False`` 时有意义. 由 handler 判定而非调度器解析结果载荷, 使调度器不耦合各任务
+    类型的字段结构; 未置位的失败一律视为终态.
+    """
 
     def as_dict(self) -> dict | None:
         """结果载荷的唯一落库形状: 以 JSON 模式 dump, 由 `tasks.result` 列的 `json.dumps` 直接写出.
@@ -55,6 +61,13 @@ class TaskHandler[P: BaseModel | dict = dict, R: BaseModel | dict = dict](ABC):
         """异常 / 取消时补交的失败载荷: 任务已攒下的事实不该随异常丢掉.
 
         默认没有; 有站点事实的 handler 覆写它, 由 worker 在崩溃与取消分支落库.
+        """
+        return None
+
+    def retry_payload(self, payload: P) -> dict | None:
+        """自动重排前改写任务载荷; 返回 ``None`` 表示沿用原载荷.
+
+        用于丢弃本次已被证明无效的参数 (例如批次级禁用来源): 不改写会让重排逐字复现同一次失败.
         """
         return None
 

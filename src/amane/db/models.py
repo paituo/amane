@@ -347,6 +347,12 @@ class Task(SQLModel, table=True):
     created_at: datetime = Field(default_factory=_utcnow)
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    retry_at: datetime | None = None
+    """下次允许认领的时间; NULL 表示立即可认领.
+
+    仅在自动重排时写入 (状态回到 ``QUEUED``): 到点前该行不参与认领, 因此退避不依赖额外循环.
+    手动重试不写本列 (克隆出的新行为 NULL).
+    """
 
 
 class TaskLink(SQLModel, table=True):

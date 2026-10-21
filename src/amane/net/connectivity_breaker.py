@@ -8,10 +8,10 @@
 
     breaker = ConnectivityBreaker()  # proxy 锁激进, host 锁保守
     if breaker.is_open(key):
-        raise RequestError(...)      # 短路, 不触网
+        raise RequestError(...)  # 短路, 不触网
     try:
         ...
-    except (CurlError, TimeoutError):
+    except CurlError, TimeoutError:
         await breaker.record_failure(key)
         raise
     else:

@@ -895,6 +895,12 @@ export type ConnectivityReportResponse = {
      * Items
      */
     items?: Array<ConnectivityItemResponse>;
+    /**
+     * Circuit Breakers
+     */
+    circuit_breakers?: {
+        [key: string]: string;
+    };
 };
 
 /**
@@ -1365,7 +1371,7 @@ export type FacetSortField = 'name' | 'count';
  *
  * summary.json / task report 的 reason 字段.
  */
-export type FailureReason = 'http_error' | 'api_error' | 'not_found' | 'rate_limited' | 'server_error' | 'timeout' | 'network' | 'cloudflare_challenge' | 'cloudflare_blocked' | 'ip_banned' | 'geo_restricted' | 'age_verification' | 'login_required' | 'empty_response' | 'no_usable_metadata' | 'parse_error' | 'crawler_unavailable' | 'unexpected';
+export type FailureReason = 'http_error' | 'api_error' | 'not_found' | 'rate_limited' | 'server_error' | 'timeout' | 'network' | 'cloudflare_challenge' | 'cloudflare_blocked' | 'ip_banned' | 'geo_restricted' | 'age_verification' | 'login_required' | 'empty_response' | 'no_usable_metadata' | 'parse_error' | 'crawler_unavailable' | 'circuit_open' | 'unexpected';
 
 /**
  * FeedCreateRequest
@@ -3061,6 +3067,42 @@ export type NetworkConfig = {
      * Default Rate Limit
      */
     default_rate_limit?: number;
+    /**
+     * Response Cache Ttl S
+     */
+    response_cache_ttl_s?: number;
+    /**
+     * Response Cache Max Entries
+     */
+    response_cache_max_entries?: number;
+    /**
+     * Adaptive Rate Limit
+     */
+    adaptive_rate_limit?: boolean;
+    /**
+     * Adaptive Rate Floor Ratio
+     */
+    adaptive_rate_floor_ratio?: number;
+    /**
+     * Proxies
+     */
+    proxies?: Array<string>;
+    /**
+     * Proxy Circuit Fail Max
+     */
+    proxy_circuit_fail_max?: number;
+    /**
+     * Proxy Circuit Cooldown S
+     */
+    proxy_circuit_cooldown_s?: number;
+    /**
+     * Host Circuit Fail Max
+     */
+    host_circuit_fail_max?: number;
+    /**
+     * Host Circuit Cooldown S
+     */
+    host_circuit_cooldown_s?: number;
 };
 
 /**
@@ -4358,7 +4400,7 @@ export type SiteName = 'airav' | 'avbase' | 'avsox' | 'dahlia' | 'dmm' | 'faleno
 /**
  * SiteOutcomeKind
  */
-export type SiteOutcomeKind = 'ok' | 'failed' | 'cache_hit';
+export type SiteOutcomeKind = 'ok' | 'failed' | 'cache_hit' | 'skipped';
 
 /**
  * SiteOutcomeRecord
@@ -4628,6 +4670,10 @@ export type TaskChildItem = {
      */
     finished_at?: string | null;
     /**
+     * Retry At
+     */
+    retry_at?: string | null;
+    /**
      * Link Key
      */
     link_key: string;
@@ -4720,6 +4766,10 @@ export type TaskListItem = {
      * Finished At
      */
     finished_at?: string | null;
+    /**
+     * Retry At
+     */
+    retry_at?: string | null;
 };
 
 /**
@@ -4785,6 +4835,10 @@ export type TaskResponse = {
      * Finished At
      */
     finished_at?: string | null;
+    /**
+     * Retry At
+     */
+    retry_at?: string | null;
     /**
      * Payload
      */
@@ -5264,6 +5318,18 @@ export type WorkerConfig = {
      * Shutdown Timeout
      */
     shutdown_timeout?: number;
+    /**
+     * Retry Max Attempts
+     */
+    retry_max_attempts?: number;
+    /**
+     * Retry Base Delay S
+     */
+    retry_base_delay_s?: number;
+    /**
+     * Retry Max Delay S
+     */
+    retry_max_delay_s?: number;
 };
 
 export type HealthCheckData = {

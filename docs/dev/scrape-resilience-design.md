@@ -48,6 +48,12 @@
 >   - `crawlers/http.py`：新增 `_BROWSER_SOLVABLE_REASONS = {CLOUDFLARE_CHALLENGE}`；`get_html` 把 `get_text` 包进 `try/except RequestError`，失败语义属该集合且 `AUTO` + 后端可用 → `_browser_required.add(scope)` 后走 `get_rendered`，与 2xx 挑战页**共用同一条切换路径**（首次降级后该来源后续请求直接渲染，不再付一次 curl 失败）。
 >   - 收敛原则：只降级**浏览器真正能解决**的失败。IP 封禁/地域限制（同一出口 IP，渲染同样过不去）、连接错误/超时/CIRCUIT_OPEN（同一网络，渲染无意义）一律原样上抛——盲目降级只会白起一次浏览器。探测层 `check` 对 403 挑战本就降级（`probe_get` → `failed(CLOUDFLARE_CHALLENGE)` → `_render_check`），与刮削层至此同形态，本轮补测试锁定。
 >   - 测试：`tests/crawlers/test_http.py` 追加 9 例（403 挑战降级渲染/切换对 scope 持久/无浏览器上抛/OFF 模式不降级/5 类不可解失败绝不渲染（IP 封禁·地域·404·超时·CIRCUIT_OPEN）/降级后挑战仍未解决上抛/探测层 403 降级）。`tests/crawlers`+`tests/net`+`tests/handlers`+`tests/aggregate`+`tests/plugins` 共 **1175 passed**（唯一失败为预存环境问题：分发未含 camoufox，`git stash` 验证先于本改动存在）。
+> - **P0-① 归因修正**（本轮）：失败类型按 curl 错误码分流，阈值改为可配置。
+>   - 事故：`official` 站 10s 超时经 `_connectivity_failure` 同时计入 `proxy:` 锁，两次即开路；随后 dmm/javdb/javbus 在同一 `proxy:` 键下全部短路。333 个失败任务中 321 个未发出任何请求，错误信息为「未找到 X 的元数据」。
+>   - `net/http.py`：新增 `_PROXY_BLAME_CURL_CODES = {5, 6, 7}`，只有解析代理/解析主机/无法连接代理计入 `proxy:` 锁；28 超时、35 TLS 握手中断、52 空响应、56 接收失败仅计入 `host:` 锁。
+>   - `net/http.py`：非 2xx 响应处调用 `_connectivity_success` 复位两把锁。此前该路径既不记成功也不记失败，半开探针停留在 `HALF_OPEN`（该状态 `is_open` 恒为 True），该键此后一直短路。
+>   - `config/manager.py` 加 `proxy_circuit_fail_max` / `proxy_circuit_cooldown_s` / `host_circuit_fail_max` / `host_circuit_cooldown_s`（均 `x-hidden`，默认 2/120s 与 5/300s，与历史实现一致）；`app/runtime.py` 据此构造熔断器。
+>   - 测试：`tests/net/test_http.py` 追加 `TestConnectivityBlame`（10 例：8 种错误码的归因表/连续超时仅开 host 锁/404 与 503 均释放半开探针）。
 > - 设计文档九项（P0-①/③、P0-②、P1-④、P2-⑤/⑥/⑦/⑧、P3-⑨）全部落地。
 
 ---
@@ -114,30 +120,37 @@ class BreakerState(StrEnum):
     OPEN = "open"
     HALF_OPEN = "half_open"
 
+
 @dataclass
 class _Entry:
     state: BreakerState = CLOSED
     failures: int = 0
-    opened_at: float = 0.0      # monotonic, 开路时刻
+    opened_at: float = 0.0  # monotonic, 开路时刻
     half_open_at: float = 0.0
 
+
 class ConnectivityBreaker:
-    def __init__(self, *, fail_max: int = 3, cooldown_s: float = 120.0,
-                 half_open_probe: bool = True):
+    def __init__(self, *, fail_max: int = 3, cooldown_s: float = 120.0, half_open_probe: bool = True):
         ...
         self._lock = asyncio.Lock()
 
     def is_open(self, key: str) -> bool:
         """OPEN 且冷却未到 → True；否则（含 HALF_OPEN）放行一次探测。"""
+
     def record_failure(self, key: str) -> None:
         """失败计数 +1；达 fail_max → OPEN（记 opened_at）。"""
+
     def record_success(self, key: str) -> None:
         """HALF_OPEN 探测成功 → CLOSED；CLOSED 不变。"""
 ```
 
-**两把锁 key 与阈值**：
-- `proxy:<url>`（如 `proxy:socks5h://127.0.0.1:10808`）：`fail_max=2, cooldown=120s` —— 代理死影响所有走它的站，应快速开路。
-- `host:<host>`（如 `host:www.dmm.co.jp`）：`fail_max=5, cooldown=300s` —— 单站抖动不应秒杀全站。
+**两把锁 key 与阈值**（经 `network.proxy_circuit_fail_max` / `proxy_circuit_cooldown_s` / `host_circuit_fail_max` / `host_circuit_cooldown_s` 下发，默认 2 / 120s 与 5 / 300s）：
+- `proxy:<url>`（如 `proxy:socks5h://127.0.0.1:10808`）：阈值低 —— 代理故障影响经由它的全部站点，应快速开路。
+- `host:<host>`（如 `host:www.dmm.co.jp`）：阈值高 —— 单个站点抖动不应对该站点连续短路。
+
+**失败归因**：只有 curl 5 / 6 / 7（解析代理、解析主机、无法连接代理）计入 `proxy:` 锁；28 超时、35 TLS 握手中断、52 空响应、56 接收失败仅计入 `host:` 锁。单个站点不响应不足以判定代理不可用，计入 `proxy:` 会使一次站点超时连带短路经由该代理的所有站点。
+
+**复位约定**：任何 HTTP 响应（含 4xx / 5xx）即证明链路可用，复位两把锁。缺失该复位时半开探针停留在 `HALF_OPEN`，而该状态的 `is_open` 恒为 True，对应键此后持续短路直至进程重启。
 
 **`WebClient` 改造**（`net/http.py`）：
 1. `__init__` 新增参数 `connectivity: ConnectivityBreaker | None = None`（`http.py:205`），由 `runtime.py:124` 构造并注入单例。
@@ -148,9 +161,10 @@ proxy_key = f"proxy:{self._proxy_for(host) if use_proxy else ''}"
 if self._connectivity is not None:
     for k in (proxy_key, host_key):
         if k and self._connectivity.is_open(k):
-            raise RequestError(url, RequestFailure(
-                kind=FailureKind.CURL, reason=FailureReason.CIRCUIT_OPEN,
-                message=f"circuit open: {k}"))
+            raise RequestError(
+                url,
+                RequestFailure(kind=FailureKind.CURL, reason=FailureReason.CIRCUIT_OPEN, message=f"circuit open: {k}"),
+            )
 ```
 3. 在失败分支（`http.py:325-330` 的 `CurlError`/`TimeoutError`）`record_failure`：
 ```python
@@ -183,9 +197,7 @@ disabled_sources: set[str] = Field(default_factory=set)
 （向后兼容：旧 JSON 缺字段用默认值，`model_dump(mode="json")` 也正常序列化 `set` → `list`。）
 2. `handlers/scrape.py:103-105` 把 `disabled_sources` 并入 `exclude`：
 ```python
-exclude = {
-    f: list(s) for f, s in self._config.scraping.field_blacklist.items()
-}
+exclude = {f: list(s) for f, s in self._config.scraping.field_blacklist.items()}
 # 合并批次级禁用源（整字段链禁用，等价于"该源整体不可用"）
 if payload.disabled_sources:
     exclude = {f: [*s, *payload.disabled_sources] for f, s in exclude.items()}

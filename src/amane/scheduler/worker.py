@@ -3,6 +3,7 @@
 import asyncio
 import time
 from contextlib import suppress
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
 import structlog
@@ -12,6 +13,7 @@ from ..config import HotSettings
 from ..events import EventType
 from ..handlers.protocol import TaskResult
 from ..observability import Recorder
+from .retry_budget import RetryBudget
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Mapping
@@ -356,14 +358,54 @@ class AsyncWorker:
                 else:
                     duration_s = round(time.monotonic() - start_time, 2)
                     err = result.error or "Unknown error"
-                    await self._repo.fail_task(task_id, error=err, result=result.as_dict())
-                    logger.warning("task failed", error=result.error, duration_s=duration_s)
-                    await _finalize_recorder(success=False, error=err)
-                    if self._event_bus:
-                        await self._event_bus.emit(
-                            EventType.TASK_FAILED,
-                            {"task_id": task_id, "type": task_type_str, "error": err},
+                    budget = RetryBudget.from_config(self._get_hot() if self._get_hot is not None else None)
+                    delay = budget.delay_for(task.retries) if budget.should_defer(result, task) else None
+                    if delay is None:
+                        await self._repo.fail_task(task_id, error=err, result=result.as_dict())
+                        logger.warning("task failed", error=result.error, duration_s=duration_s)
+                        await _finalize_recorder(success=False, error=err)
+                        if self._event_bus:
+                            await self._event_bus.emit(
+                                EventType.TASK_FAILED,
+                                {"task_id": task_id, "type": task_type_str, "error": err},
+                            )
+                    else:
+                        # 环境性失败: 退回队列并推迟认领, 不在熔断冷却期内空转.
+                        # 载荷可由 handler 改写 (丢弃本次已失效的批次级参数), 否则重排会复现同一失败.
+                        try:
+                            next_payload = handler.retry_payload(typed_payload)
+                        except Exception:
+                            logger.exception("retry payload build failed", task_id=task_id)
+                            next_payload = None
+                        retry_at = datetime.now(UTC) + timedelta(seconds=delay)
+                        await self._repo.defer_task(
+                            task_id,
+                            error=err,
+                            result=result.as_dict(),
+                            retry_at=retry_at,
+                            payload=next_payload,
                         )
+                        logger.warning(
+                            "task deferred",
+                            error=result.error,
+                            duration_s=duration_s,
+                            retry_in_s=round(delay),
+                            attempt=task.retries + 1,
+                            retry_at=retry_at.isoformat(),
+                        )
+                        await _finalize_recorder(success=False, error=err)
+                        if self._event_bus:
+                            # 复用 task.failed 并在载荷内标注 deferred: 前端事件名是联合类型, 不新增分支.
+                            await self._event_bus.emit(
+                                EventType.TASK_FAILED,
+                                {
+                                    "task_id": task_id,
+                                    "type": task_type_str,
+                                    "error": err,
+                                    "deferred": True,
+                                    "retry_in_s": round(delay),
+                                },
+                            )
 
                 self._done_queue.put_nowait(task_id)
             finally:

@@ -60,9 +60,7 @@ def resolve_entry_number(feed: Feed, entry: ParsedFeedEntry) -> str | None:
 class FeedService:
     """到期 Feed 拉取与去重; auto_enqueue 时按源顺序入队, 同番号取最新一条."""
 
-    def __init__(
-        self, repo: Repository, web_client: WebClient, availability: SourceAvailability | None = None
-    ) -> None:
+    def __init__(self, repo: Repository, web_client: WebClient, availability: SourceAvailability | None = None) -> None:
         self._repo = repo
         self._web = web_client
         self._availability = availability
@@ -229,9 +227,7 @@ class FeedService:
         enqueued_numbers: set[str] = set()
         enqueued = 0
         if feed.auto_enqueue:
-            disabled = (
-                await self._availability.disabled_sources() if self._availability is not None else frozenset()
-            )
+            disabled = await self._availability.disabled_sources() if self._availability is not None else frozenset()
             for _entry, number in new_entries:
                 if number is None or number in enqueued_numbers or _entry.item_key in ignored_keys:
                     continue

@@ -295,9 +295,7 @@ _CHALLENGE_BODY = b"<html><head><title>Just a moment...</title></head><body>_cf_
 def _challenge_failure(status: int = 403) -> RequestFailure:
     """Cloudflare 挑战页以 403/503 返回: 正文带 ``_cf_chl_opt``, 失败语义可判定."""
 
-    return RequestFailure(
-        kind=FailureKind.HTTP_STATUS, status=status, message=f"HTTP {status}", body=_CHALLENGE_BODY
-    )
+    return RequestFailure(kind=FailureKind.HTTP_STATUS, status=status, message=f"HTTP {status}", body=_CHALLENGE_BODY)
 
 
 # 浏览器无解的失败: 同一出口 IP / 同一网络下渲染同样过不去, 降级只会白起一次浏览器.
@@ -403,9 +401,7 @@ async def test_get_html_403_challenge_browser_failure_propagates(mock_web, mock_
     mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
     mock_browser.get_page.return_value = (
         None,
-        RequestFailure(
-            kind=FailureKind.UNEXPECTED, message="challenge", reason=FailureReason.CLOUDFLARE_CHALLENGE
-        ),
+        RequestFailure(kind=FailureKind.UNEXPECTED, message="challenge", reason=FailureReason.CLOUDFLARE_CHALLENGE),
     )
 
     with pytest.raises(RequestError) as exc:

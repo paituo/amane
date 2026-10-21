@@ -37,6 +37,8 @@
     "started": "开始时间",
     "duration": "耗时",
     "retries": "重试次数",
+    "retryPending": "待重试",
+    "retryAt": "下次重试",
     "id": "ID",
     "root": "根任务",
     "linkKey": "子任务",
@@ -85,6 +87,7 @@
     "no_usable_metadata": "无可用元数据",
     "parse_error": "站点响应解析失败",
     "crawler_unavailable": "来源不可用",
+    "circuit_open": "来源已被熔断",
     "unexpected": "意外错误"
   },
   "result": {
@@ -98,7 +101,8 @@
     "group": {
       "failed": "失败",
       "ok": "成功",
-      "cache_hit": "缓存"
+      "cache_hit": "缓存",
+      "skipped": "跳过"
     },
     "detail": {
       "unknown": "原因未知"

@@ -335,9 +335,7 @@ class TestWebClientResponseCache:
         assert t1 == t2 == "<html>hi</html>"
         assert len(html.calls) == 1
 
-        js = _StubSession(
-            _StubResponse(content=b'{"a": 1}', headers={"Content-Type": "application/json"})
-        )
+        js = _StubSession(_StubResponse(content=b'{"a": 1}', headers={"Content-Type": "application/json"}))
         monkeypatch.setattr(client, "_session", js)
         j1 = await client.get_json("https://example.com/data")
         j2 = await client.get_json("https://example.com/data")

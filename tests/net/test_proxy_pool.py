@@ -136,7 +136,7 @@ class TestWebClientProxyRotation:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_all_pool_proxies_dead_fails_after_trying_each_once(self):
         client = _client(proxy_pool=ProxyPool([P1, P2]))
-        session = _ProxyAwareSession({P1: CurlError("refused"), P2: CurlError("refused")})
+        session = _ProxyAwareSession({P1: CurlError("refused", 7), P2: CurlError("refused", 7)})
         client._session = session
         try:
             with pytest.raises(RequestError):
@@ -149,7 +149,7 @@ class TestWebClientProxyRotation:
     async def test_dead_proxies_open_breaker_then_short_circuit_without_network(self):
         breaker = ConnectivityBreaker(proxy_fail_max=1)
         client = _client(proxy_pool=ProxyPool([P1, P2], breaker), connectivity=breaker)
-        session = _ProxyAwareSession({P1: CurlError("refused"), P2: CurlError("refused")})
+        session = _ProxyAwareSession({P1: CurlError("refused", 7), P2: CurlError("refused", 7)})
         client._session = session
         try:
             with pytest.raises(RequestError):

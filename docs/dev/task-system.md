@@ -154,6 +154,16 @@ handler 之间复用的阶段逻辑, 不是一条可跳步的总管线:
 
 文件操作中取消只能等操作完成后才能真正生效. 两个已知窗口: claim 的 commit 到登记之间取消不可达 (回退的状态条件写入不覆盖已终态, 任务仍可能执行); 登记后、首次调度前被取消由 done callback 补写终态.
 
+### 失败与自动重排
+
+handler 返回 `success=False` 时用 `TaskResult.retryable` 声明本次失败是否属**环境性**: 熔断短路、连接失败、超时、5xx、限流、空应答, 以及全部来源被批次级探测跳过. 判定在 `handlers/retry_policy.py`, 调度器只读这个布尔值, 不解析各任务类型的结果载荷.
+
+置位且预算未用尽时, worker 调 `defer_task` 把行退回 `QUEUED` 并写入 `retry_at`, 不落 `FAILED`; 未置位的失败仍是终态. 退避从 `retry_base_delay_s` 起倍增、封顶 `retry_max_delay_s`, 抖动 ±20%, 上限由 `retry_max_attempts` 控制 (0 关闭). `claim_next_task` 跳过 `retry_at` 未到点的行, 退避因此不依赖额外扫描循环, 也不阻塞排在它后面的任务.
+
+首次退避默认 180s, 必须大于代理熔断冷却 (120s): 否则首次重排必然撞在开路期内, 白白烧掉一次预算. 重排前 handler 可经 `retry_payload` 改写载荷 —— SCRAPE 借此丢弃 `disabled_sources`, 该字段是扇出那一刻的可用性探测结论, 沿用会让重排在建图阶段跳过同一批来源, 逐字复现同一失败.
+
+不重排的三条路径: 取消 (`fail_running_task`)、未归类异常 (一次暴露优于反复重试)、进程重启清扫 (`fail_all_running_tasks`). 因此 `retries` 的语义是「已自动重排次数」, 与手动重试区分: 手动重试克隆新行 (`retry_at` 为空), 自动重排原地复用同一行且保留上次的 `error` / `result`. 取舍与实测数据见 [task-retry-design.md](task-retry-design.md).
+
 ### 配置变更与退役
 
 配置变更不取消运行中任务. `_apply_rebuild_unlocked()` 构建新 worker 后调用旧 worker 的 `retire()`: 同步置 `is_main=False` 并唤醒轮询, 主循环退出且不再认领; 已认领任务继续运行; 新 worker 立即开始认领. 退役 worker 由后台 `drain()` 处理: 先等主循环退出 (认领结算并登记), 再等活跃任务清零, 顺序不可交换; 清零后释放其持有的 r18 句柄与浏览器池. 连续变更时多个退役 worker 可以并存.

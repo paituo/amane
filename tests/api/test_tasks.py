@@ -1,6 +1,7 @@
 """/tasks 端点测试"""
 
 import asyncio
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, get_args
 
@@ -542,3 +543,24 @@ class TestTaskRecord:
 
         assert submitted.status_code == 202
         assert submitted.json()["payload"]["path"] == str(real / "sub")
+
+
+class TestRetryAtExposure:
+    """退避重排的任务在列表里仍可见, 并暴露 retry_at."""
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_deferred_task_listed_as_queued(
+        self, client: AsyncClient, repo: Repository, stop_worker: None
+    ) -> None:
+        task = await repo.create_task(TaskType.SCRAPE, payload={"number": "RETRY-1"})
+        assert task.id is not None
+        claimed = await repo.claim_next_task()
+        assert claimed is not None and claimed.id == task.id
+        retry_at = datetime.now(UTC) + timedelta(seconds=300)
+        assert await repo.defer_task(task.id, error="未找到 RETRY-1 的元数据", result=None, retry_at=retry_at)
+
+        body = (await client.get("tasks?status=queued")).json()
+        item = next(i for i in body["items"] if i["id"] == task.id)
+        assert item["retry_at"] is not None
+        assert item["retries"] == 1
+        assert item["error"] == "未找到 RETRY-1 的元数据"

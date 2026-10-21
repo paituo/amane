@@ -141,7 +141,13 @@ def build_network_stack(
     )
     # P2-⑦ 多代理池: 仅在 network.proxies 非空时启用; 池与熔断器共享 proxy:<url> 键,
     # 开路代理不被选中, 冷却后半开探针自动回池. 未配置池时行为与改造前完全一致.
-    breaker = ConnectivityBreaker()
+    # 阈值经 network.* 下发 (默认值与历史实现一致), 便于依据代理质量与站点响应情况调整.
+    breaker = ConnectivityBreaker(
+        proxy_fail_max=hot.network.proxy_circuit_fail_max,
+        proxy_cooldown_s=hot.network.proxy_circuit_cooldown_s,
+        host_fail_max=hot.network.host_circuit_fail_max,
+        host_cooldown_s=hot.network.host_circuit_cooldown_s,
+    )
     proxy_pool = ProxyPool(hot.network.proxies, breaker) if hot.network.proxies else None
     if proxy_pool is not None:
         logger.info("proxy_pool.enabled", proxies=list(hot.network.proxies))

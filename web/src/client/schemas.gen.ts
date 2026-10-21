@@ -1575,6 +1575,13 @@ export const ConnectivityReportResponseSchema = {
             },
             type: 'array',
             title: 'Items'
+        },
+        circuit_breakers: {
+            additionalProperties: {
+                type: 'string'
+            },
+            type: 'object',
+            title: 'Circuit Breakers'
         }
     },
     additionalProperties: false,
@@ -2276,6 +2283,7 @@ export const FailureReasonSchema = {
         'no_usable_metadata',
         'parse_error',
         'crawler_unavailable',
+        'circuit_open',
         'unexpected'
     ],
     title: 'FailureReason',
@@ -3509,7 +3517,16 @@ export const HotSettingsSchema = {
                 chunk_size: 1048576,
                 concurrency: 10,
                 rate_limits: {},
-                default_rate_limit: 5
+                default_rate_limit: 5,
+                response_cache_ttl_s: 300,
+                response_cache_max_entries: 256,
+                adaptive_rate_limit: true,
+                adaptive_rate_floor_ratio: 0.25,
+                proxies: [],
+                proxy_circuit_fail_max: 2,
+                proxy_circuit_cooldown_s: 120,
+                host_circuit_fail_max: 5,
+                host_circuit_cooldown_s: 300
             }
         },
         sr: {
@@ -3617,7 +3634,10 @@ export const HotSettingsSchema = {
             default: {
                 concurrency: 10,
                 poll_interval: 2,
-                shutdown_timeout: 0
+                shutdown_timeout: 0,
+                retry_max_attempts: 8,
+                retry_base_delay_s: 180,
+                retry_max_delay_s: 3600
             }
         },
         logging: {
@@ -6175,6 +6195,76 @@ export const NetworkConfigSchema = {
             minimum: 0.1,
             title: 'Default Rate Limit',
             default: 5
+        },
+        response_cache_ttl_s: {
+            type: 'number',
+            maximum: 86400,
+            minimum: 0,
+            title: 'Response Cache Ttl S',
+            default: 300,
+            'x-hidden': true
+        },
+        response_cache_max_entries: {
+            type: 'integer',
+            maximum: 5000,
+            minimum: 0,
+            title: 'Response Cache Max Entries',
+            default: 256,
+            'x-hidden': true
+        },
+        adaptive_rate_limit: {
+            type: 'boolean',
+            title: 'Adaptive Rate Limit',
+            default: true,
+            'x-hidden': true
+        },
+        adaptive_rate_floor_ratio: {
+            type: 'number',
+            maximum: 1,
+            minimum: 0.05,
+            title: 'Adaptive Rate Floor Ratio',
+            default: 0.25,
+            'x-hidden': true
+        },
+        proxies: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Proxies',
+            'x-hidden': true
+        },
+        proxy_circuit_fail_max: {
+            type: 'integer',
+            maximum: 100,
+            minimum: 1,
+            title: 'Proxy Circuit Fail Max',
+            default: 2,
+            'x-hidden': true
+        },
+        proxy_circuit_cooldown_s: {
+            type: 'number',
+            maximum: 3600,
+            minimum: 5,
+            title: 'Proxy Circuit Cooldown S',
+            default: 120,
+            'x-hidden': true
+        },
+        host_circuit_fail_max: {
+            type: 'integer',
+            maximum: 100,
+            minimum: 1,
+            title: 'Host Circuit Fail Max',
+            default: 5,
+            'x-hidden': true
+        },
+        host_circuit_cooldown_s: {
+            type: 'number',
+            maximum: 3600,
+            minimum: 5,
+            title: 'Host Circuit Cooldown S',
+            default: 300,
+            'x-hidden': true
         }
     },
     type: 'object',
@@ -8442,7 +8532,8 @@ export const SiteOutcomeKindSchema = {
     enum: [
         'ok',
         'failed',
-        'cache_hit'
+        'cache_hit',
+        'skipped'
     ],
     title: 'SiteOutcomeKind'
 } as const;
@@ -8991,6 +9082,18 @@ export const TaskChildItemSchema = {
             ],
             title: 'Finished At'
         },
+        retry_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Retry At'
+        },
         link_key: {
             type: 'string',
             title: 'Link Key'
@@ -9154,6 +9257,18 @@ export const TaskListItemSchema = {
                 }
             ],
             title: 'Finished At'
+        },
+        retry_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Retry At'
         }
     },
     type: 'object',
@@ -9286,6 +9401,18 @@ export const TaskResponseSchema = {
                 }
             ],
             title: 'Finished At'
+        },
+        retry_at: {
+            anyOf: [
+                {
+                    type: 'string',
+                    format: 'date-time'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Retry At'
         },
         payload: {
             additionalProperties: true,
@@ -10046,6 +10173,30 @@ export const WorkerConfigSchema = {
             minimum: 0,
             title: 'Shutdown Timeout',
             default: 0,
+            'x-hidden': true
+        },
+        retry_max_attempts: {
+            type: 'integer',
+            maximum: 20,
+            minimum: 0,
+            title: 'Retry Max Attempts',
+            default: 8,
+            'x-hidden': true
+        },
+        retry_base_delay_s: {
+            type: 'number',
+            maximum: 3600,
+            minimum: 30,
+            title: 'Retry Base Delay S',
+            default: 180,
+            'x-hidden': true
+        },
+        retry_max_delay_s: {
+            type: 'number',
+            maximum: 86400,
+            minimum: 60,
+            title: 'Retry Max Delay S',
+            default: 3600,
             'x-hidden': true
         }
     },

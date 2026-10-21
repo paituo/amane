@@ -15,6 +15,7 @@ from amane.db.models import MediaFileStatus, Task, TaskStatus, TaskType
 from amane.enums import MetadataField, SiteName
 from amane.handlers import RefreshHandler, RefreshPayload, ScanMode, ScrapeHandler, ScrapePayload
 from amane.library import CleanupInventory, InventorySource, InventoryStore, LibraryFileKind, LibraryHit, scan_inventory
+from amane.net.errors import FailureReason, SourceError
 from amane.observability import Recorder
 from amane.parsing import ContentType
 from amane.plugins.models import SourceDescriptor
@@ -208,6 +209,7 @@ class TestScrapeHandler:
 
         assert result.success is False
         # 失败也要带结果载荷, 否则界面只剩一句错误, 说不清是哪个站点怎么了.
+        assert result.retryable is False, "站点可达但无数据是业务性结论, 不应重排"
         assert result.result is not None
         assert result.result.metadata_id is None
         assert result.result.failed_sites == ["javdb"]
@@ -216,9 +218,7 @@ class TestScrapeHandler:
         ]
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_failed_scrape_keeps_media_file_pending(
-        self, repo: Repository, resource_store, tmp_path: Path
-    ):
+    async def test_failed_scrape_keeps_media_file_pending(self, repo: Repository, resource_store, tmp_path: Path):
         """P2-⑧ 续跑不变量: 刮削失败不得把 media_file 推离 PENDING.
 
         若失败会把状态写成 FAILED/SKIP, 默认 ``RefreshPayload.scrape={PENDING}`` 的后续 REFRESH
@@ -226,7 +226,9 @@ class TestScrapeHandler:
         报告失败, 不触碰 ``finalize_media_file`` (仅成功路径写 SCRAPED), 因此媒体文件应保持 PENDING.
         """
         empty_factory = FakeFactory({"javdb": EmptySearchCrawler()})
-        h = ScrapeHandler(repo=repo, factory=empty_factory, resource_store=resource_store, pipeline_config=HotSettings())
+        h = ScrapeHandler(
+            repo=repo, factory=empty_factory, resource_store=resource_store, pipeline_config=HotSettings()
+        )
         media = await repo.create_media_file(library_id=1, path="/media/TEST-001.mp4")
         assert media.status == MediaFileStatus.PENDING
         recorder = Recorder.begin(
@@ -1103,9 +1105,7 @@ class TestRefreshHandler:
         assert len(scrapes) == n
 
     @pytest.mark.asyncio(loop_scope="function")
-    async def test_failed_file_refanned_by_default_refresh(
-        self, repo: Repository, resource_store, tmp_path: Path
-    ):
+    async def test_failed_file_refanned_by_default_refresh(self, repo: Repository, resource_store, tmp_path: Path):
         """P2-⑧ 端到端: 刮削失败的 PENDING 文件, 下一次默认 REFRESH 仍重新扇出 SCRAPE (续跑可用).
 
         SCRAPE 不在 ``_EXCLUSIVE_FIELDS`` 中 (tasks.py), ``_insert_or_reuse`` 总会新建任务, 因此即便
@@ -1193,9 +1193,7 @@ class TestScrapeHandlerDisabledSources:
             }
         )
         config = _config_with({ContentType.CENSORED: [SiteName.JAVDB, SiteName.DMM]})
-        h = ScrapeHandler(
-            repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config
-        )
+        h = ScrapeHandler(repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config)
         media = await repo.create_media_file(library_id=1, path="/media/MIDV-123.mp4")
         recorder = Recorder.begin(
             tmp_path, Task(id=1, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
@@ -1234,19 +1232,13 @@ class TestScrapeHandlerDisabledSources:
             }
         )
         config = _config_with({ContentType.CENSORED: [SiteName.JAVDB, SiteName.DMM]})
-        h = ScrapeHandler(
-            repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config
-        )
+        h = ScrapeHandler(repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config)
         media = await repo.create_media_file(library_id=1, path="/media/MIDV-123.mp4")
         recorder = Recorder.begin(
             tmp_path, Task(id=2, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
         )
         try:
-            await h.handle(
-                ScrapePayload(
-                    media_file_id=media.id, number="MIDV-123", content_type=ContentType.CENSORED
-                )
-            )
+            await h.handle(ScrapePayload(media_file_id=media.id, number="MIDV-123", content_type=ContentType.CENSORED))
         finally:
             recorder.close()
         assert tally == {"javdb": 1, "dmm": 1}
@@ -1274,3 +1266,57 @@ class TestRefreshHandlerDisabledInjection:
         scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
         assert len(scrapes) == 1
         assert scrapes[0].payload["disabled_sources"] == []
+
+
+class CircuitOpenCrawler:
+    """模拟请求被连接健康熔断短路: 未触网即失败."""
+
+    name = SiteName.JAVDB
+
+    def __init__(self, client=None):
+        self.client = client
+
+    async def fetch(self, query, options=None) -> MediaMetadata | None:
+        raise SourceError(FailureReason.CIRCUIT_OPEN, detail="circuit open: proxy")
+
+
+class TestScrapeRetryable:
+    """失败是否交调度器退避重排: 取决于站点结论是环境性还是业务性."""
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_circuit_open_failure_is_retryable(self, repo: Repository, resource_store, tmp_path: Path):
+        h = ScrapeHandler(
+            repo=repo,
+            factory=FakeFactory({"javdb": CircuitOpenCrawler()}),
+            resource_store=resource_store,
+            pipeline_config=HotSettings(),
+        )
+        media = await repo.create_media_file(library_id=1, path="/media/TEST-002.mp4")
+        recorder = Recorder.begin(
+            tmp_path, Task(id=92, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
+        )
+        try:
+            result = await h.handle(
+                ScrapePayload(media_file_id=media.id, number="TEST-002", content_type=ContentType.CENSORED)
+            )
+        finally:
+            recorder.close()
+
+        assert result.success is False
+        # 熔断短路没有发出请求, 属环境性失败: 交由调度器退避重排.
+        assert result.retryable is True
+        assert result.result is not None
+        assert [row.reason for row in result.result.outcomes] == [FailureReason.CIRCUIT_OPEN]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_disabled_sources_are_dropped_for_retry(self):
+        """批次级跳过是扇出那一刻的探测结论; 重排时必须丢弃, 否则重排必然复现同一失败."""
+        h = ScrapeHandler.__new__(ScrapeHandler)
+        payload = ScrapePayload(number="TEST-003", disabled_sources={"official", "javdb"})
+
+        patched = h.retry_payload(payload)
+
+        assert patched is not None
+        assert patched["disabled_sources"] == []
+        assert patched["number"] == "TEST-003"
+        assert h.retry_payload(ScrapePayload(number="TEST-004")) is None

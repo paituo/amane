@@ -121,9 +121,7 @@ class SourceAvailability:
 
     async def _probe_and_cache(self) -> frozenset[str]:
         checks = await self._safe_check()
-        disabled = frozenset(
-            c.source_id for c in checks if c.outcome.status is ConnectivityStatus.FAILED
-        )
+        disabled = frozenset(c.source_id for c in checks if c.outcome.status is ConnectivityStatus.FAILED)
         self._cache = disabled
         self._expires_at = time.monotonic() + self._ttl
         self._retry_at = 0.0

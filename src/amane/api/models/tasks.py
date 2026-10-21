@@ -78,6 +78,8 @@ class TaskListItem(BaseModel):
     created_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    retry_at: datetime | None = None
+    """下一次自动重排的到点时间; ``queued`` 且非空表示正在退避等待重试."""
 
 
 class TaskChildItem(TaskListItem):

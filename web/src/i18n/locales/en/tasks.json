@@ -47,6 +47,8 @@
     "started": "Started",
     "duration": "Duration",
     "retries": "Retries",
+    "retryPending": "Retry pending",
+    "retryAt": "Next retry",
     "id": "ID",
     "root": "Root task",
     "linkKey": "Subtask",
@@ -97,6 +99,7 @@
     "no_usable_metadata": "No usable metadata",
     "parse_error": "Failed to parse the site response",
     "crawler_unavailable": "Source unavailable",
+    "circuit_open": "Source circuit open",
     "unexpected": "Unexpected error"
   },
   "result": {
@@ -110,7 +113,8 @@
     "group": {
       "failed": "Failed",
       "ok": "Succeeded",
-      "cache_hit": "Cached"
+      "cache_hit": "Cached",
+      "skipped": "Skipped"
     },
     "detail": {
       "unknown": "Unknown reason"

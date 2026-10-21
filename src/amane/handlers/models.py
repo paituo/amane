@@ -109,9 +109,7 @@ class ScrapePayload(BaseModel):
     """批次级探测判定不可用的来源 (source_id 集合); 注入聚合图作 skip: 不触网、不计失败."""
 
 
-def build_feed_scrape_payload(
-    feed: Feed, number: str, disabled_sources: Iterable[str] | None = None
-) -> ScrapePayload:
+def build_feed_scrape_payload(feed: Feed, number: str, disabled_sources: Iterable[str] | None = None) -> ScrapePayload:
     content_type = feed.content_type or infer_content_type(number)
 
     use_cache: set[CacheKind] = set()

@@ -7,7 +7,7 @@ import asyncio
 import random
 import time
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 import aiofiles
 import httpx2 as httpx
@@ -80,6 +80,14 @@ _ADAPT_MIN_RATE = 0.05
 
 _ADAPT_BACKOFF_STATUSES = frozenset({408, 500, 502, 503, 504})
 """服务端应激状态: 温和减速. 即 ``_RETRYABLE_STATUS_CODES`` 去掉单独走立即减半的 429."""
+
+_PROXY_BLAME_CURL_CODES = frozenset({5, 6, 7})
+"""归咎代理的 curl 错误码: 5 解析代理失败, 6 解析主机失败, 7 无法连接代理.
+
+其余连接错误 (28 超时、35 TLS 握手中断、52 空响应、56 接收失败等) 仅记录 ``host:`` 锁.
+单个站点不响应不足以判定代理不可用; 若计入 ``proxy:`` 锁, 一次站点超时即使共享代理开路,
+经由该代理的所有站点随之短路 (实测: official 超时开路后 dmm/javdb/javbus 全部短路,
+333 个失败任务中 321 个未发出任何请求即判定无数据)."""
 
 
 def _response_cache_key(
@@ -300,9 +308,7 @@ class RateLimiters:
             for url in base_urls:
                 host = httpx.URL(url).host
                 if host:
-                    instance._limiters[host] = _make_limiter(
-                        cfg.rate_limit, adaptive=adaptive, floor_ratio=floor_ratio
-                    )
+                    instance._limiters[host] = _make_limiter(cfg.rate_limit, adaptive=adaptive, floor_ratio=floor_ratio)
 
         # Plugin descriptors can provide a source-level default without being
         # forced into the core SiteConfig model.
@@ -526,8 +532,10 @@ class WebClient:
         # 诊断探测 (bypass_circuit) 与强制刷新 (bypass_cache) 一律不走缓存.
         # 池模式下代理分量归一为空串: 池内代理是运营者声明等价的多出口, 按代理分会把缓存打散成
         # N 份 (轮询导致同 URL  consecutive 请求交替 miss); 归一后任一代理取到的响应全池共享.
+        # 取一次本地引用: 属性在多次读取间可能被热重载换掉, 且这样类型收窄才对 cache_key 的判定成立.
+        cache = self._response_cache
         cache_key = None
-        if self._response_cache is not None and self._response_cache.enabled and not bypass_circuit and not bypass_cache:
+        if cache is not None and cache.enabled and not bypass_circuit and not bypass_cache:
             cache_key = _response_cache_key(
                 method,
                 url,
@@ -537,11 +545,13 @@ class WebClient:
                 data,
                 json,
             )
-        if cache_key is not None:
-            cached = self._response_cache.get(cache_key)
+        if cache is not None and cache_key is not None:
+            cached = cache.get(cache_key)
             if cached is not None:
                 self._record_exchange(method, url, resp=cached, error=None, t0=t0, attempts=1)
-                return cached
+                # CachedResponse 是 Response 的鸭子类型替身 (curl 的 Response 绑定 easy handle,
+                # 无法离线构造), 调用方用到的字段完全一致, 故按 Response 返回.
+                return cast(Response, cached)
 
         # 连接健康熔断: 代理或 host 已被连续失败判定为不可用 → 直接短路, 不再支付「重试 + 镜像 + 超时」预算.
         # 诊断类一次性探测传 bypass_circuit=True, 永远反映真实状态, 不被自身开路阻断 (见 design doc 4.4).
@@ -618,15 +628,19 @@ class WebClient:
                     body=_failure_body(resp),
                 )
                 should_retry = resp.status_code in _RETRYABLE_STATUS_CODES
+                # 拿到 HTTP 响应即证明链路可用, 复位两把锁. 4xx/5xx 属站点侧状态, 与连接无关;
+                # 不复位会使半开探针停留在 HALF_OPEN (该状态的 is_open 恒为 True), 该键此后一直短路.
+                await self._connectivity_success(host_key, proxy_key)
 
             except CurlError as e:
                 failure = RequestFailure(kind=FailureKind.CURL, message=f"curl error: {e}")
-                # 连接级错误 (代理拒连 / host 不可达): 立即 fail-fast, 不白付重试预算;
-                # 由上游熔断开路, 后续请求毫秒级短路.
+                # 连接级错误 (代理拒连 / host 不可达): 立即 fail-fast, 不支付重试预算;
+                # 由上游熔断开路, 后续请求在毫秒级短路.
                 should_retry = False
-                await self._connectivity_failure(host_key, proxy_key)
-                # 多代理池 (P2-⑦): 该代理来自池且池内还有未试过的健康代理 → 换一个重发
-                # (与指纹轮换一样不占重试预算; 死代理的熔断计数已在上面累加).
+                # 仅代理侧错误码连带记录 proxy 锁; 站点不响应 (28) 只记录 host 锁, 不影响其它站点.
+                await self._connectivity_failure(host_key, proxy_key if e.code in _PROXY_BLAME_CURL_CODES else None)
+                # 多代理池 (P2-⑦): 该代理来自池且池内还有未试过的健康代理 → 更换后重发
+                # (与指纹轮换一致, 不占重试预算; 失效代理的熔断计数已在上一步累加).
                 rotated = self._rotate_proxy(use_pool, tried_proxies)
                 if rotated is not None:
                     proxy, proxy_key = rotated
@@ -634,9 +648,10 @@ class WebClient:
                     continue
             except TimeoutError:
                 failure = RequestFailure(kind=FailureKind.TIMEOUT, message="timeout")
-                # 超时保留重试 (可能是慢服务器), 但记录失败以便熔断在持续超时时开路.
+                # 超时保留重试 (可能为慢服务器), 同时记录失败以便持续超时时开路.
+                # 超时仅记录 host 锁: 单个站点不响应不足以判定代理不可用.
                 should_retry = True
-                await self._connectivity_failure(host_key, proxy_key)
+                await self._connectivity_failure(host_key, None)
                 # 超时同样可能是代理质量问题: 池内有备用代理时换一个再试.
                 rotated = self._rotate_proxy(use_pool, tried_proxies)
                 if rotated is not None:
@@ -695,6 +710,9 @@ class WebClient:
 
     def _store_response(self, cache_key: tuple, url: str, resp: Response) -> None:
         """把 2xx 文本类 GET 响应写入缓存; 大响应/二进制/异常一律跳过 (下载与分片不占缓存)."""
+        cache = self._response_cache
+        if cache is None:
+            return
         try:
             content = resp.content
         except Exception:
@@ -704,12 +722,14 @@ class WebClient:
         content_type = (resp.headers.get("Content-Type") or resp.headers.get("content-type") or "").lower()
         if not any(content_type.startswith(prefix) for prefix in _CACHABLE_CONTENT_TYPES):
             return
+        raw_headers: dict[str, str] = {}
         try:
-            raw_headers = dict(resp.headers)
+            # 头值可能是 None (缺值头), 缓存里只保留有值的项.
+            raw_headers = {str(k): str(v) for k, v in dict(resp.headers).items() if v is not None}
         except Exception:
             raw_headers = {}
         final_url = str(resp.url) if resp.url else url
-        self._response_cache.put(
+        cache.put(
             cache_key,
             CachedResponse(
                 status_code=resp.status_code,

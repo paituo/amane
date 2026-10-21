@@ -593,11 +593,33 @@ class NetworkConfig(BaseModel):
     池是唯一代理来源: 全部开路时请求快速失败 (``CIRCUIT_OPEN``), 不静默回退 ``network.proxy``.
     连接级失败自动换池内下一个健康代理 (不占重试预算). 空列表 = 不启用, 行为与改造前一致."""
 
+    proxy_circuit_fail_max: int = Field(default=2, ge=1, le=100, json_schema_extra={"x-hidden": True})
+    """``proxy:`` 熔断连续失败阈值. 仅统计代理侧错误 (解析代理失败 / 解析主机失败 / 无法连接代理),
+    站点超时与 TLS 握手中断不计入."""
+
+    proxy_circuit_cooldown_s: float = Field(default=120.0, ge=5.0, le=3600.0, json_schema_extra={"x-hidden": True})
+    """``proxy:`` 开路后的冷却时长 (秒); 冷却结束放出一个半开探针, 成功即关闭."""
+
+    host_circuit_fail_max: int = Field(default=5, ge=1, le=100, json_schema_extra={"x-hidden": True})
+    """``host:`` 熔断连续失败阈值. 单站抖动不应秒杀全站, 故高于 ``proxy_circuit_fail_max``."""
+
+    host_circuit_cooldown_s: float = Field(default=300.0, ge=5.0, le=3600.0, json_schema_extra={"x-hidden": True})
+    """``host:`` 开路后的冷却时长 (秒)."""
+
 
 class WorkerConfig(BaseModel):
     concurrency: int = Field(default=10, ge=1, le=64)
     poll_interval: float = Field(default=2.0, ge=0.1, le=10, json_schema_extra={"x-hidden": True})
     shutdown_timeout: float = Field(default=0, ge=0, le=120.0, json_schema_extra={"x-hidden": True})
+
+    retry_max_attempts: int = Field(default=8, ge=0, le=20, json_schema_extra={"x-hidden": True})
+    """环境性失败的自动重排次数上限; 0 关闭自动重排."""
+
+    retry_base_delay_s: float = Field(default=180.0, ge=30.0, le=3600.0, json_schema_extra={"x-hidden": True})
+    """首次重排的等待秒数; 须大于代理熔断冷却, 否则首次重排会撞在开路上空转."""
+
+    retry_max_delay_s: float = Field(default=3600.0, ge=60.0, le=86400.0, json_schema_extra={"x-hidden": True})
+    """退避上限 (秒); 达到上限后按固定间隔重排, 直到用尽次数."""
 
 
 class WatcherConfig(BaseModel):

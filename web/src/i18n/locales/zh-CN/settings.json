@@ -533,6 +533,42 @@
       "default_rate_limit": {
         "label": "默认速率限制",
         "description": "未设置网站默认请求速率"
+      },
+      "response_cache_ttl_s": {
+        "label": "响应缓存有效期",
+        "description": "跨任务复用搜索页与详情页响应的保留时长(秒), 0 表示关闭"
+      },
+      "response_cache_max_entries": {
+        "label": "响应缓存条目上限",
+        "description": "响应缓存最多保留的条目数, 0 表示关闭"
+      },
+      "adaptive_rate_limit": {
+        "label": "自适应限速",
+        "description": "按站点响应情况在配置速率与下限之间自动浮动, 关闭后恢复固定速率"
+      },
+      "adaptive_rate_floor_ratio": {
+        "label": "自适应限速下限比例",
+        "description": "自适应减速下限 = 站点配置速率 × 该比例"
+      },
+      "proxies": {
+        "label": "多代理池",
+        "description": "按顺序轮选的代理地址列表, 留空表示不启用; 站点级代理仍优先"
+      },
+      "proxy_circuit_fail_max": {
+        "label": "代理熔断阈值",
+        "description": "代理连续失败多少次后判定不可用并暂停使用; 只统计连不上代理类的失败, 站点超时不计"
+      },
+      "proxy_circuit_cooldown_s": {
+        "label": "代理熔断冷却",
+        "description": "代理被判定不可用后暂停多少秒, 到期放行一次探测, 成功即恢复"
+      },
+      "host_circuit_fail_max": {
+        "label": "站点熔断阈值",
+        "description": "同一站点连续失败多少次后暂停访问该站; 高于代理阈值, 避免单站抖动连累其它站点"
+      },
+      "host_circuit_cooldown_s": {
+        "label": "站点熔断冷却",
+        "description": "站点被暂停后等待多少秒再放行一次探测"
       }
     },
     "worker": {
@@ -547,6 +583,18 @@
       "shutdown_timeout": {
         "label": "关闭超时",
         "description": "关闭时等待活跃任务完成的最长时间 (秒)"
+      },
+      "retry_max_attempts": {
+        "label": "失败重排次数",
+        "description": "环境性失败 (熔断短路 / 超时 / 5xx / 全部来源跳过) 的自动重排上限, 0 表示不重排"
+      },
+      "retry_base_delay_s": {
+        "label": "重排首次延迟",
+        "description": "首次重排前等待的秒数, 应大于代理熔断冷却时间"
+      },
+      "retry_max_delay_s": {
+        "label": "重排延迟上限",
+        "description": "指数退避的最大间隔 (秒)"
       }
     },
     "watcher": {

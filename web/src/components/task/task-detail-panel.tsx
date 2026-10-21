@@ -28,7 +28,7 @@ import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { TaskLogView } from "@/components/log/task-log-view";
 import { TaskResultPanel } from "@/components/task/task-result-panel";
 import { formatDuration } from "@/lib/format-duration";
-import { statusColor } from "@/lib/task/display";
+import { retryAtOf, statusColor } from "@/lib/task/display";
 import { useProgressStore } from "@/stores/progress";
 
 export interface TaskNodeActions {
@@ -91,6 +91,7 @@ export function TaskDetailPanel({ task, linkKey, actions }: TaskDetailPanelProps
   const isTerminal = task.status === "done" || task.status === "failed";
   const hasPayload = Object.keys(detail?.payload ?? {}).length > 0;
   const hasResult = detail?.result != null;
+  const retryAt = retryAtOf(task);
 
   return (
     <Stack gap="sm" p="sm">
@@ -113,10 +114,20 @@ export function TaskDetailPanel({ task, linkKey, actions }: TaskDetailPanelProps
           <Text size="xs" c="dimmed">
             {t("detail.status")}
           </Text>
-          <Badge size="sm" variant="light" color={statusColor(task.status)} mt={2}>
-            {t(`status.${task.status}`)}
-          </Badge>
+          <Group gap={4} mt={2}>
+            <Badge size="sm" variant="light" color={statusColor(task.status)}>
+              {t(`status.${task.status}`)}
+            </Badge>
+            {retryAt != null ? (
+              <Badge size="sm" variant="light" color="orange">
+                {t("detail.retryPending")}
+              </Badge>
+            ) : null}
+          </Group>
         </div>
+        {retryAt != null ? (
+          <Fact label={t("detail.retryAt")}>{retryAt.toLocaleTimeString()}</Fact>
+        ) : null}
       </Group>
 
       {task.status === "running" && (

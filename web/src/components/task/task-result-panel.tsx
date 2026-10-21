@@ -5,6 +5,7 @@ import {
   IconCheck,
   IconDatabase,
   IconExternalLink,
+  IconPlayerSkipForward,
   IconUser,
 } from "@tabler/icons-react";
 import { Link } from "@tanstack/react-router";
@@ -345,6 +346,7 @@ function groupByOutcome(
     failed: [],
     ok: [],
     cache_hit: [],
+    skipped: [],
   };
   for (const row of outcomes) {
     buckets[row.outcome].push(row);
@@ -363,6 +365,8 @@ function outcomeColor(outcome: SiteOutcomeKind): string {
       return "green";
     case "cache_hit":
       return "gray";
+    case "skipped":
+      return "yellow";
     default:
       return assertNever(outcome);
   }
@@ -376,6 +380,8 @@ function outcomeIcon(outcome: SiteOutcomeKind) {
       return <IconCheck size={12} />;
     case "cache_hit":
       return <IconDatabase size={12} />;
+    case "skipped":
+      return <IconPlayerSkipForward size={12} />;
     default:
       return assertNever(outcome);
   }

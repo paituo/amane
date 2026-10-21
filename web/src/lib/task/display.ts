@@ -63,6 +63,18 @@ export function childCountOf(task: TaskListItem): number {
   return task.child_count ?? 0;
 }
 
+/**
+ * 退避重排中的任务: 排队中且已写入下次认领时间.
+ *
+ * `retry_at` 只在自动重排时写入; 认领后仍留在行上表示「上一次的退避时间」, 因此必须同时要求排队中,
+ * 否则运行中与已完成的任务会误显示为待重试.
+ */
+export function retryAtOf(task: TaskListItem): Date | null {
+  if (task.status !== "queued" || task.retry_at == null) return null;
+  const at = new Date(task.retry_at);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
 export function childStatusOf(task: TaskListItem): Required<TaskChildStatusCounts> {
   const s = task.child_status;
   if (s == null) return EMPTY_CHILD_STATUS;

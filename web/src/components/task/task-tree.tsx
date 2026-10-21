@@ -13,7 +13,13 @@ import {
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
 import { formatDuration } from "@/lib/format-duration";
 import { nextOffsetPageParam } from "@/lib/infinite-list";
-import { childCountOf, childStatusOf, statusColor, TASK_ICONS } from "@/lib/task/display";
+import {
+  childCountOf,
+  childStatusOf,
+  retryAtOf,
+  statusColor,
+  TASK_ICONS,
+} from "@/lib/task/display";
 import { bindExpandedPane } from "@/lib/task/focus-pane";
 import type { TaskProgress } from "@/stores/progress";
 import classes from "./task-tree.module.css";
@@ -150,6 +156,7 @@ function TaskTreeNode({
   const open = opened.has(task.id);
   const childCount = childCountOf(task);
   const childStatus = childStatusOf(task);
+  const retryAt = retryAtOf(task);
   const progress = progressByTask[task.id];
   const duration = formatDuration(task.started_at, task.finished_at);
   const TypeIcon = TASK_ICONS[task.type];
@@ -243,6 +250,13 @@ function TaskTreeNode({
               </Tooltip>
             ) : null}
             <ChildStatusPills status={childStatus} />
+            {retryAt != null ? (
+              <Tooltip label={`${t("detail.retryAt")} ${retryAt.toLocaleTimeString()}`}>
+                <Badge size="xs" variant="light" color="orange">
+                  {t("detail.retryPending")}
+                </Badge>
+              </Tooltip>
+            ) : null}
             {linkKey != null ? (
               <Tooltip label={t("tree.linkKey")}>
                 <Code fz={11}>{linkKey}</Code>

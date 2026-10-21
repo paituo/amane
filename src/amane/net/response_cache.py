@@ -30,7 +30,10 @@ class _CaseInsensitiveHeaders(Mapping[str, str]):
     def __init__(self, raw: Mapping[str, str]) -> None:
         self._raw = {str(k): v for k, v in raw.items()}
 
-    def get(self, key: str, default: Any = None) -> Any:
+    def get(self, key: object, default: Any = None) -> Any:
+        """按大小写不敏感匹配取值; 非字符串键直接返回 ``default`` (Mapping 契约要求接受 object)."""
+        if not isinstance(key, str):
+            return default
         lowered = key.lower()
         for k, v in self._raw.items():
             if k.lower() == lowered:

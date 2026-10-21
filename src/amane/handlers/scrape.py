@@ -15,7 +15,7 @@ from ..aggregate import (
 from ..crawlers.models import SearchQuery
 from ..crawlers.site_roles import builtin_descriptors
 from ..db.models import TaskType
-from ..enums import ActorGender, MetadataField, SiteName
+from ..enums import ActorGender, MetadataField
 from ..media import materialize_images
 from ..net.errors import FailureReason
 from ..observability import current
@@ -24,6 +24,7 @@ from ..plugins.models import SourceDescriptor, SourceTrait
 from ._common import ensure_oshash, finalize_media_file
 from .models import ActorScrapePayload, CacheKind, OrganizePayload, ScrapePayload, ScrapeResult
 from .protocol import FollowupTask, TaskHandler, TaskResult
+from .retry_policy import is_environmental_failure
 
 if TYPE_CHECKING:
     from ..config import HotSettings
@@ -156,15 +157,18 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
 
         # 标量可以全空: 只要有来源返回结果, 海报 / 评分 / external_id 仍可入库.
         if not result.raw:
+            outcomes = current().site_outcomes()
             current().warning("no data found from any source", failed_sites=result.failed_sites)
             # 失败也要能回答"为什么刮不到": 站点明细随失败结果落库.
             return TaskResult(
                 success=False,
                 error=f"未找到 {payload.number} 的元数据",
+                # 站点可达但无数据属业务性结论; 熔断短路 / 超时 / 5xx / 全部跳过属环境性, 交调度器退避重排.
+                retryable=is_environmental_failure(outcomes),
                 result=ScrapeResult(
                     field_sources=result.field_sources,
                     failed_sites=list(result.failed_sites),
-                    outcomes=current().site_outcomes(),
+                    outcomes=outcomes,
                 ),
             )
 
@@ -259,7 +263,7 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
 
     @staticmethod
     def _merge_exclude(
-        field_blacklist: Mapping[MetadataField, Sequence[SiteName]] | None,
+        field_blacklist: Mapping[MetadataField, Sequence[str]] | None,
         disabled: set[str],
     ) -> dict[MetadataField, list[str]]:
         """把批次级 ``disabled`` (全局禁用) 与配置级 ``field_blacklist`` (按字段禁用) 合并成 compile_priority 的 exclude.
@@ -294,6 +298,18 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
             failed_sites=[row.site for row in outcomes if row.outcome is SiteOutcomeKind.FAILED],
             outcomes=outcomes,
         )
+
+    def retry_payload(self, payload: ScrapePayload) -> dict | None:
+        """重排时丢弃批次级禁用来源.
+
+        ``disabled_sources`` 是扇出那一刻的可用性探测结论; 沿用原载荷会让重排在建图阶段再次跳过同一批
+        来源, 必然复现「全部跳过」. 清空后由请求级熔断兜底: 站点仍不可用则首个请求快速失败, 不再空转.
+        """
+        if not payload.disabled_sources:
+            return None
+        raw = payload.model_dump(mode="json")
+        raw["disabled_sources"] = []
+        return raw
 
     async def _auto_organize_followups(self, payload: ScrapePayload, file: MediaFile | None) -> list[FollowupTask]:
         """库开启自动整理时为本次刮削的那一个文件描述 ORGANIZE 后继.

@@ -194,7 +194,12 @@ export const MANUAL_TASK_TYPES = exhaustiveTuple<ManualTaskType>()(
 );
 
 /** 刮削站点结果分组顺序. */
-export const SITE_OUTCOME_KINDS = exhaustiveTuple<SiteOutcomeKind>()("ok", "cache_hit", "failed");
+export const SITE_OUTCOME_KINDS = exhaustiveTuple<SiteOutcomeKind>()(
+  "ok",
+  "cache_hit",
+  "skipped",
+  "failed",
+);
 
 export const SORT_ORDERS = exhaustiveTuple<SortOrder>()("asc", "desc");
 

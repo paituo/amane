@@ -1,4 +1,5 @@
 from collections.abc import Iterable, Sequence
+from datetime import datetime
 
 from pydantic import BaseModel
 from sqlalchemy import asc, update
@@ -180,11 +181,18 @@ class TasksRepoMixin(RepositoryMixinBase):
             return await session.get(Task, task_id)
 
     async def claim_next_task(self) -> Task | None:
-        """认领优先级最高的 QUEUED 行, 标为 RUNNING."""
+        """认领优先级最高的可执行 QUEUED 行, 标为 RUNNING.
+
+        ``retry_at`` 未到点的行 (自动重排待退避) 不参与认领, 也不阻塞排在它后面的任务.
+        """
+        now = _utcnow()
         async with self._session() as session:
             stmt = (
                 select(Task)
-                .where(Task.status == TaskStatus.QUEUED)
+                .where(
+                    Task.status == TaskStatus.QUEUED,
+                    (col(Task.retry_at).is_(None)) | (col(Task.retry_at) <= now),
+                )
                 .order_by(col(Task.priority).desc(), asc(col(Task.created_at)))
                 .limit(1)
             )
@@ -276,6 +284,38 @@ class TasksRepoMixin(RepositoryMixinBase):
             task.result = result
             task.retries += 1
             task.finished_at = _utcnow()
+            session.add(task)
+            await session.commit()
+            return True
+
+    async def defer_task(
+        self,
+        task_id: int,
+        *,
+        error: str,
+        result: dict[str, object] | None,
+        retry_at: datetime,
+        payload: dict[str, object] | None = None,
+    ) -> bool:
+        """把环境性失败的任务退回 QUEUED, 并推迟到 ``retry_at`` 再参与认领; 返回是否命中.
+
+        仅对 RUNNING 生效, 与 :meth:`fail_running_task` 同构: 已进入终态的行不得被重排覆盖.
+        ``error`` 与 ``result`` 保留本次失败事实, 使重试等待期内仍可回答「上次为何失败」;
+        ``payload`` 非空时覆盖任务载荷 (供 handler 丢弃本次已失效的参数, 如批次级禁用来源).
+        """
+        async with self._session() as session:
+            task = await session.get(Task, task_id)
+            if task is None or task.status != TaskStatus.RUNNING:
+                return False
+            task.status = TaskStatus.QUEUED
+            task.error = error
+            task.result = result
+            task.retries += 1
+            task.retry_at = retry_at
+            task.started_at = None
+            task.finished_at = _utcnow()
+            if payload is not None:
+                task.payload = payload
             session.add(task)
             await session.commit()
             return True

@@ -533,6 +533,42 @@
       "default_rate_limit": {
         "label": "Default Rate Limit",
         "description": "Default request rate for sites without an override"
+      },
+      "response_cache_ttl_s": {
+        "label": "Response Cache TTL",
+        "description": "How long search and detail responses are reused across tasks, in seconds; 0 disables"
+      },
+      "response_cache_max_entries": {
+        "label": "Response Cache Entries",
+        "description": "Maximum number of cached responses; 0 disables"
+      },
+      "adaptive_rate_limit": {
+        "label": "Adaptive Rate Limit",
+        "description": "Adjust the request rate between the configured rate and the floor by site response; disable to use a fixed rate"
+      },
+      "adaptive_rate_floor_ratio": {
+        "label": "Adaptive Rate Floor Ratio",
+        "description": "Floor = site configured rate × this ratio"
+      },
+      "proxies": {
+        "label": "Proxy Pool",
+        "description": "Ordered proxy list picked in turn; empty disables the pool. Site-level proxies still take precedence"
+      },
+      "proxy_circuit_fail_max": {
+        "label": "Proxy Circuit Threshold",
+        "description": "Consecutive proxy-side failures before the proxy is taken out of use; site timeouts do not count"
+      },
+      "proxy_circuit_cooldown_s": {
+        "label": "Proxy Circuit Cooldown",
+        "description": "Seconds the proxy stays suspended; one probe is then let through, and success restores it"
+      },
+      "host_circuit_fail_max": {
+        "label": "Site Circuit Threshold",
+        "description": "Consecutive failures before a site is paused; kept higher than the proxy threshold so one flaky site cannot drag others down"
+      },
+      "host_circuit_cooldown_s": {
+        "label": "Site Circuit Cooldown",
+        "description": "Seconds a paused site waits before one probe is let through"
       }
     },
     "worker": {
@@ -547,6 +583,18 @@
       "shutdown_timeout": {
         "label": "Shutdown Timeout",
         "description": "Maximum time to wait for active tasks on shutdown (seconds)"
+      },
+      "retry_max_attempts": {
+        "label": "Retry Attempts",
+        "description": "Automatic retry limit for environmental failures (circuit open / timeout / 5xx / all sources skipped); 0 disables retries"
+      },
+      "retry_base_delay_s": {
+        "label": "Retry Base Delay",
+        "description": "Seconds to wait before the first retry; should exceed the proxy circuit cooldown"
+      },
+      "retry_max_delay_s": {
+        "label": "Retry Max Delay",
+        "description": "Upper bound of the exponential backoff interval (seconds)"
       }
     },
     "watcher": {
