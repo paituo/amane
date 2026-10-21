@@ -115,15 +115,17 @@ async def test_poll_is_idempotent_for_repeated_paths(repo: Repository, tmp_path:
 @pytest.mark.asyncio(loop_scope="function")
 async def test_sync_library_switches_to_everything(repo: Repository, tmp_path: Path) -> None:
     lib = await repo.create_library(name="es", path=str(tmp_path), ingest=LibraryIngest.NATIVE)
+    lib_id = lib.id
+    assert lib_id is not None
     service = _service(repo, _stub_client(tmp_path))
     try:
         await service.start()
-        assert lib.id not in service._everything_routes
+        assert lib_id not in service._everything_routes
 
-        updated = await repo.update_library(lib.id, ingest=LibraryIngest.EVERYTHING)
+        updated = await repo.update_library(lib_id, ingest=LibraryIngest.EVERYTHING)
         assert updated is not None
         service.sync_library(updated)
-        assert lib.id in service._everything_routes
+        assert lib_id in service._everything_routes
     finally:
         await service.stop()
 
@@ -132,15 +134,16 @@ async def test_sync_library_switches_to_everything(repo: Repository, tmp_path: P
 async def test_ingest_switch_swaps_channel(repo: Repository, tmp_path: Path) -> None:
     """三态往返: 每次切换都要摘掉上一通道的路由, 否则旧通道会继续往同一个库写."""
     lib = await repo.create_library(name="es", path=str(tmp_path), ingest=LibraryIngest.NATIVE)
-    assert lib.id is not None
+    lib_id = lib.id
+    assert lib_id is not None
     service = _service(repo, _stub_client(tmp_path))
 
     async def switch(ingest: LibraryIngest, cloud_path: str | None = None) -> None:
-        updated = await repo.update_library(lib.id, ingest=ingest, cloud_path=cloud_path)
+        updated = await repo.update_library(lib_id, ingest=ingest, cloud_path=cloud_path)
         assert updated is not None
         service.sync_library(updated)
-        assert (lib.id in service._everything_routes) is (ingest is LibraryIngest.EVERYTHING)
-        assert (lib.id in service._cloud_routes) is (ingest is LibraryIngest.CLOUDDRIVE)
+        assert (lib_id in service._everything_routes) is (ingest is LibraryIngest.EVERYTHING)
+        assert (lib_id in service._cloud_routes) is (ingest is LibraryIngest.CLOUDDRIVE)
 
     try:
         await service.start()
