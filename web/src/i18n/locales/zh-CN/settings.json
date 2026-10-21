@@ -625,6 +625,14 @@
         "label": "API 密钥",
         "description": "上游服务的密钥; 只保存在本机配置"
       },
+      "auth_mode": {
+        "label": "鉴权方式",
+        "description": "游客 Token 无需填写密钥, 由 Amane 向上游换取短期令牌并自动续期",
+        "options": {
+          "api_key": "API 密钥",
+          "guest_token": "游客 Token"
+        }
+      },
       "api_type": {
         "label": "API 类型",
         "options": {

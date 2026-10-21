@@ -1,10 +1,11 @@
 """跨语系经缓存后经 pydantic-ai ``Model`` 翻译; 简繁经 ``zhconv``, 不经 LLM、不写入缓存.
 
-已是目标语言返回 ``None``. ``build_translator`` 在 enabled=False 或缺 api_key 时返回 ``None``.
+已是目标语言返回 ``None``. ``build_translator`` 在 enabled=False、或密钥模式下缺 api_key 时返回 ``None``.
 """
 
 import re
 from collections.abc import Mapping
+from pathlib import Path
 
 import structlog
 import zhconv
@@ -14,9 +15,10 @@ from pydantic_ai.direct import model_request
 from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
 from pydantic_ai.models import Model
 
-from ..enums import ApiType, Language, MetadataField
+from ..enums import ApiType, Language, LLMAuthMode, MetadataField
 from ..utils.language import needs_llm_translation
 from .cache import TranslationCache
+from .guest_token import GUEST_API_KEY, GuestTokenAuth, load_or_create_device_id
 from .model import build_model
 
 logger = structlog.get_logger()
@@ -154,22 +156,36 @@ def build_translator(
     *,
     enabled: bool,
     api_type: ApiType,
+    auth_mode: LLMAuthMode,
     api_key: str | None,
     base_url: str,
     model: str,
     rate_limit: float,
     proxy: str | None = None,
+    device_id_path: Path | None = None,
     system_prompt: str | None = None,
     field_prompts: Mapping[MetadataField, str] | None = None,
     cache: TranslationCache | None = None,
 ) -> LLMTranslator | None:
-    """未启用或缺密钥时返回 ``None``. ``cache`` 热重载时复用同一实例."""
-    if not enabled or not api_key:
+    """未启用、或密钥模式下缺密钥时返回 ``None``. ``cache`` 热重载时复用同一实例.
+
+    ``guest_token`` 模式不读 ``api_key``: 鉴权由 ``GuestTokenAuth`` 在每次请求前注入,
+    ``build_model`` 收到的占位密钥被其覆盖. ``device_id_path`` 为 deviceId 的持久化位置.
+    """
+    if not enabled:
         return None
+    if auth_mode is LLMAuthMode.API_KEY and not api_key:
+        return None
+
+    auth: GuestTokenAuth | None = None
+    effective_key = api_key
+    if auth_mode is LLMAuthMode.GUEST_TOKEN:
+        auth = GuestTokenAuth(load_or_create_device_id(device_id_path), proxy=proxy)
+        effective_key = GUEST_API_KEY
     # 翻译路径自建传输客户端 (proxy + 超时) 并交给 provider; 助理不传, 由 pydantic-ai 构造默认客户端.
-    http_client = AsyncClient(proxy=proxy, timeout=Timeout(_TIMEOUT), follow_redirects=True)
+    http_client = AsyncClient(auth=auth, proxy=proxy, timeout=Timeout(_TIMEOUT), follow_redirects=True)
     return LLMTranslator(
-        build_model(api_type, base_url=base_url, api_key=api_key, model=model, http_client=http_client),
+        build_model(api_type, base_url=base_url, api_key=effective_key, model=model, http_client=http_client),
         cache,
         rate_limit=rate_limit,
         system_prompt=system_prompt,

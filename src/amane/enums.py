@@ -63,6 +63,12 @@ class ApiType(StrEnum):
     ANTHROPIC = "anthropic"
 
 
+# 上游凭据来源: api_key = 配置里的密钥, guest_token = Amane 自行取得短期游客 token.
+class LLMAuthMode(StrEnum):
+    API_KEY = "api_key"
+    GUEST_TOKEN = "guest_token"
+
+
 class ActorGender(StrEnum):
     """演员性别 - 用于展示与按站裁剪刮削源."""
 

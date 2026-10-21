@@ -7,8 +7,9 @@
 
 翻译经 pydantic-ai 接入上游: `llm/model.py::build_model` 按 `ApiType` (chat / response / anthropic) 构造 `Model`, 与助理共用同一套 provider 映射, 但两边的凭据与配置各自独立 (见 [agent.md](agent.md)).
 
+- **鉴权两档**: `llm.auth_mode` 决定凭据来源. `api_key` 读配置里的密钥, 缺密钥不装配; `guest_token` 由 `llm/guest_token.py::GuestTokenAuth` 在每次请求前注入短期 JWT — 上游 TTL 30 分钟, 提前 5 分钟刷新, 并发请求共享同一次刷新, 此时 `api_key` 不参与, 占位密钥被鉴权流程覆盖. deviceId 持久化在 `data_dir/llm_device_id`, 有效期内同 deviceId 复用同一 token, 删除该文件即换新身份. `guest_token` 只服务翻译: 上游免费网关没有工具调用通道 (`tool_calls` 恒为空, 带 `tools` 的请求回 400 或返回伪装的故障话术), 助理不得接入.
 - **单轮调用不使用 Agent**: 请求经 `pydantic_ai.direct.model_request` 发出并取 `ModelResponse.text` — 该属性只拼接文本部分, 推理模型写在 `ThinkingPart` 的思维链天然排除; 写进正文的 `<think>` 块由翻译器剥离.
-- **传输客户端归属**: 翻译路径自建 `httpx.AsyncClient` (超时 60 秒, 代理取 `network.proxy`) 交给 provider; 助理不传, 由 pydantic-ai 构造默认客户端.
+- **传输客户端归属**: 翻译路径自建 `httpx.AsyncClient` (超时 60 秒, 代理取 `network.proxy`) 交给 provider; 助理不传, 由 pydantic-ai 构造默认客户端. 换 token 的请求另建客户端且不继承环境代理, 只走显式配置的 `network.proxy` — 系统代理对上游端点常返回 404.
 - **重试由 SDK 按其默认策略承担**: Amane 不配置重试次数与退避. SDK 重试结束后仍失败, 或正文为空时, 翻译器返回 `None` 且不抛出 — 调用方保留原值.
 - **`Translator` 协议**是管线唯一依赖的翻译面, `ScrapeHandler` 仅依赖此协议, 测试可用结构兼容的替代实现.
 

@@ -30,6 +30,7 @@ from ..enums import (
     BrowserMode,
     DownloadableResource,
     Language,
+    LLMAuthMode,
     MetadataField,
     SiteName,
     WatermarkCorner,
@@ -638,6 +639,9 @@ class LLMConfig(BaseModel):
     enabled: bool = False
     """关闭时刮削管线跳过翻译步骤."""
 
+    auth_mode: LLMAuthMode = LLMAuthMode.API_KEY
+    """``guest_token`` 时免密钥: deviceId 落在 data_dir, 同 deviceId 复用同一 token."""
+
     translate_fields: list[MetadataField] = Field(default_factory=lambda: [MetadataField.TITLE, MetadataField.PLOT])
     """当前仅支持文本标量字段 (title/plot)."""
 
@@ -654,7 +658,7 @@ class LLMConfig(BaseModel):
     """
 
     api_key: str | None = None
-    """为空时即使 enabled 也不翻译."""
+    """``api_key`` 鉴权模式下为空则不翻译; ``guest_token`` 模式下不参与."""
 
     api_type: ApiType = ApiType.CHAT
     base_url: str = "https://api.openai.com/v1"

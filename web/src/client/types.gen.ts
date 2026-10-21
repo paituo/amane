@@ -1916,6 +1916,11 @@ export type InventorySummaryResponse = {
 export type JsonValue = unknown;
 
 /**
+ * LLMAuthMode
+ */
+export type LlmAuthMode = 'api_key' | 'guest_token';
+
+/**
  * LLMConfig
  *
  * 凭据放 Hot, 可在 UI 修改并热生效. 与 agent section 隔离.
@@ -1925,6 +1930,7 @@ export type LlmConfig = {
      * Enabled
      */
     enabled?: boolean;
+    auth_mode?: LlmAuthMode;
     /**
      * Translate Fields
      */

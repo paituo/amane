@@ -33,6 +33,7 @@ from ..handlers import (
 )
 from ..library import InventoryStore
 from ..llm import TranslationCache, build_translator
+from ..llm.guest_token import DEVICE_ID_FILENAME
 from ..media.watermarks import user_watermark_dir
 from ..net.browser import BrowserPool
 from ..net.http import RateLimiters, WebClient, site_proxy_overrides
@@ -504,17 +505,19 @@ def build_handlers(
     library_locks: LibraryTaskLocks | None = None,
     inventory_store: InventoryStore | None = None,
 ) -> dict[TaskType, TaskHandler[Any, Any]]:
-    # 未启用/缺密钥时 translator 为 None, ScrapeHandler 跳过翻译.
+    # 未启用、或密钥模式下缺密钥时 translator 为 None, ScrapeHandler 跳过翻译.
     # 经 _rebuild() 热重载; 代理沿用 network.proxy.
     # 译文缓存是会话级, 热重载时复用同一实例.
     translator = build_translator(
         enabled=hot.llm.enabled,
         api_type=hot.llm.api_type,
+        auth_mode=hot.llm.auth_mode,
         api_key=hot.llm.api_key,
         base_url=hot.llm.base_url,
         model=hot.llm.model,
         rate_limit=hot.llm.rate_limit,
         proxy=hot.network.proxy,
+        device_id_path=None if state_dir is None else state_dir / DEVICE_ID_FILENAME,
         system_prompt=hot.llm.system_prompt,
         field_prompts=hot.llm.field_prompts,
         cache=translation_cache,

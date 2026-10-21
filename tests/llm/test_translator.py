@@ -7,6 +7,7 @@
 - 自定义提示词进入请求, 以及提示词变化后的缓存失效
 """
 
+import asyncio
 from collections.abc import Mapping, Sequence
 
 import aiosqlite
@@ -16,9 +17,18 @@ from pydantic_ai.messages import ModelMessage, ModelRequest, ModelResponse, Syst
 from pydantic_ai.models import Model
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from amane.enums import ApiType, Language, MetadataField
-from amane.llm import LLMTranslator, TranslationCache, build_system_prompt, build_translator
+from amane.enums import ApiType, Language, LLMAuthMode, MetadataField
+from amane.llm import (
+    DEVICE_ID_FILENAME,
+    GUEST_API_KEY,
+    GuestTokenAuth,
+    LLMTranslator,
+    TranslationCache,
+    build_system_prompt,
+    build_translator,
+)
 from amane.llm import translator as translator_module
+from amane.llm.guest_token import load_or_create_device_id
 
 _SYSTEM_ZH = build_system_prompt(Language.ZH_CN, MetadataField.TITLE)
 
@@ -128,15 +138,20 @@ async def test_request_failure_returns_none(monkeypatch):
         return httpx2.Response(500, json={"error": {"message": "blocked"}}, headers={"retry-after": "0.01"})
 
     def mock_client(
-        *, proxy: str | None = None, timeout: httpx2.Timeout | None = None, follow_redirects: bool = False
+        *,
+        auth: httpx2.Auth | None = None,
+        proxy: str | None = None,
+        timeout: httpx2.Timeout | None = None,
+        follow_redirects: bool = False,
     ) -> httpx2.AsyncClient:
         """顶替翻译自建的传输客户端: 请求由 MockTransport 承载, 不触网."""
-        return httpx2.AsyncClient(transport=httpx2.MockTransport(handler))
+        return httpx2.AsyncClient(transport=httpx2.MockTransport(handler), auth=auth)
 
     monkeypatch.setattr(translator_module, "AsyncClient", mock_client)
     t = build_translator(
         enabled=True,
         api_type=ApiType.CHAT,
+        auth_mode=LLMAuthMode.API_KEY,
         api_key="test-key",
         base_url="https://api.example/v1",
         model="test-model",
@@ -166,6 +181,7 @@ def test_build_translator_gating(enabled, api_key, expected_none):
     t = build_translator(
         enabled=enabled,
         api_type=ApiType.CHAT,
+        auth_mode=LLMAuthMode.API_KEY,
         api_key=api_key,
         base_url="https://api.openai.com/v1",
         model="gpt-4o-mini",
@@ -175,15 +191,143 @@ def test_build_translator_gating(enabled, api_key, expected_none):
 
 
 @pytest.mark.asyncio
+async def test_build_translator_guest_mode_needs_no_key(monkeypatch):
+    """游客 token 模式不读 api_key: 缺密钥仍装配, 并给 model 工厂传占位密钥与鉴权客户端."""
+    captured: dict[str, object] = {}
+    real_client = httpx2.AsyncClient
+
+    def recording_client(
+        *,
+        auth: httpx2.Auth | None = None,
+        proxy: str | None = None,
+        timeout: httpx2.Timeout | None = None,
+        follow_redirects: bool = False,
+    ) -> httpx2.AsyncClient:
+        client = real_client(auth=auth, proxy=proxy, timeout=timeout, follow_redirects=follow_redirects)
+        captured.update(client=client, proxy=proxy)
+        return client
+
+    def fake_build_model(
+        api_type: ApiType,
+        *,
+        base_url: str,
+        api_key: str | None,
+        model: str,
+        http_client: httpx2.AsyncClient | None = None,
+    ) -> FunctionModel:
+        captured.update(api_key=api_key)
+        return _recording_model()[0]
+
+    monkeypatch.setattr(translator_module, "AsyncClient", recording_client)
+    monkeypatch.setattr(translator_module, "build_model", fake_build_model)
+    t = build_translator(
+        enabled=True,
+        api_type=ApiType.CHAT,
+        auth_mode=LLMAuthMode.GUEST_TOKEN,
+        api_key=None,
+        base_url="https://relay.example/v1/free",
+        model="glm-4-flash",
+        rate_limit=2.0,
+        proxy="http://proxy.example:8080",
+    )
+    assert t is not None
+    assert captured["api_key"] == GUEST_API_KEY
+    client = captured["client"]
+    assert isinstance(client, httpx2.AsyncClient)
+    assert isinstance(client.auth, GuestTokenAuth)
+    await client.aclose()
+
+
+def test_build_translator_guest_mode_still_needs_enabled():
+    """未启用时两种鉴权模式都不装配."""
+    assert (
+        build_translator(
+            enabled=False,
+            api_type=ApiType.CHAT,
+            auth_mode=LLMAuthMode.GUEST_TOKEN,
+            api_key=None,
+            base_url="https://relay.example/v1/free",
+            model="glm-4-flash",
+            rate_limit=2.0,
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize("written", [True, False])
+def test_device_id_reused_across_builds(tmp_path, written):
+    """deviceId 落盘后跨次复用; 首次访问生成并写入."""
+    path = tmp_path / DEVICE_ID_FILENAME
+    if written:
+        path.write_text("fixed-device", encoding="utf-8")
+    first = load_or_create_device_id(path)
+    second = load_or_create_device_id(path)
+    assert first == second
+    assert path.read_text(encoding="utf-8") == first
+    if written:
+        assert first == "fixed-device"
+
+
+def test_device_id_without_path_is_volatile():
+    """无 data_dir 的精简构造: 每次生成新 deviceId, 不落盘."""
+    assert load_or_create_device_id(None) != load_or_create_device_id(None)
+
+
+@pytest.mark.asyncio
+async def test_guest_token_cached_until_expiry(monkeypatch):
+    """有效期内复用同一 token, 过期后重新换取."""
+    auth = GuestTokenAuth("device")
+    calls: list[str] = []
+
+    async def fake_fetch() -> str:
+        calls.append("fetch")
+        return f"token-{len(calls)}"
+
+    monkeypatch.setattr(auth, "_fetch", fake_fetch)
+    assert await auth._current() == "token-1"
+    assert await auth._current() == "token-1"
+    assert calls == ["fetch"]
+
+    # 假装已过刷新时刻
+    auth._refresh_at = 0.0
+    assert await auth._current() == "token-2"
+    assert calls == ["fetch", "fetch"]
+
+
+@pytest.mark.asyncio
+async def test_guest_token_refresh_shared_across_concurrent_requests(monkeypatch):
+    """并发请求共享同一次换 token, 不重复打上游."""
+    auth = GuestTokenAuth("device")
+    calls: list[str] = []
+    release = asyncio.Event()
+
+    async def slow_fetch() -> str:
+        calls.append("fetch")
+        await release.wait()
+        return "token"
+
+    monkeypatch.setattr(auth, "_fetch", slow_fetch)
+    tasks = [asyncio.create_task(auth._current()) for _ in range(5)]
+    await asyncio.sleep(0)
+    release.set()
+    assert set(await asyncio.gather(*tasks)) == {"token"}
+    assert calls == ["fetch"]
+
+
+@pytest.mark.asyncio
 async def test_build_translator_builds_proxy_client(monkeypatch):
     """proxy 与超时进入翻译自建的传输客户端, 并作为 ``http_client`` 交给共享 model 工厂."""
     captured: dict[str, object] = {}
     real_client = httpx2.AsyncClient
 
     def recording_client(
-        *, proxy: str | None = None, timeout: httpx2.Timeout | None = None, follow_redirects: bool = False
+        *,
+        auth: httpx2.Auth | None = None,
+        proxy: str | None = None,
+        timeout: httpx2.Timeout | None = None,
+        follow_redirects: bool = False,
     ) -> httpx2.AsyncClient:
-        client = real_client(proxy=proxy, timeout=timeout, follow_redirects=follow_redirects)
+        client = real_client(auth=auth, proxy=proxy, timeout=timeout, follow_redirects=follow_redirects)
         captured.update(proxy=proxy, client=client)
         return client
 
@@ -203,6 +347,7 @@ async def test_build_translator_builds_proxy_client(monkeypatch):
     t = build_translator(
         enabled=True,
         api_type=ApiType.ANTHROPIC,
+        auth_mode=LLMAuthMode.API_KEY,
         api_key="key",
         base_url="https://api.example/v1",
         model="test-model",

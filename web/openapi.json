@@ -9635,6 +9635,7 @@
             "$ref": "#/components/schemas/LLMConfig",
             "default": {
               "enabled": false,
+              "auth_mode": "api_key",
               "translate_fields": [
                 "title",
                 "plot"
@@ -10045,12 +10046,24 @@
         "description": "面板入口: 状态与范围. ``exists`` 为假时其余字段无意义; 节点一律经分页接口另取."
       },
       "JsonValue": {},
+      "LLMAuthMode": {
+        "type": "string",
+        "enum": [
+          "api_key",
+          "guest_token"
+        ],
+        "title": "LLMAuthMode"
+      },
       "LLMConfig": {
         "properties": {
           "enabled": {
             "type": "boolean",
             "title": "Enabled",
             "default": false
+          },
+          "auth_mode": {
+            "$ref": "#/components/schemas/LLMAuthMode",
+            "default": "api_key"
           },
           "translate_fields": {
             "items": {

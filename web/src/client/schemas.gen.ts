@@ -3381,6 +3381,7 @@ export const HotSettingsSchema = {
             $ref: '#/components/schemas/LLMConfig',
             default: {
                 enabled: false,
+                auth_mode: 'api_key',
                 translate_fields: [
                     'title',
                     'plot'
@@ -3799,12 +3800,25 @@ export const InventorySummaryResponseSchema = {
 
 export const JsonValueSchema = {} as const;
 
+export const LLMAuthModeSchema = {
+    type: 'string',
+    enum: [
+        'api_key',
+        'guest_token'
+    ],
+    title: 'LLMAuthMode'
+} as const;
+
 export const LLMConfigSchema = {
     properties: {
         enabled: {
             type: 'boolean',
             title: 'Enabled',
             default: false
+        },
+        auth_mode: {
+            $ref: '#/components/schemas/LLMAuthMode',
+            default: 'api_key'
         },
         translate_fields: {
             items: {

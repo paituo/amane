@@ -625,6 +625,14 @@
         "label": "API Key",
         "description": "Upstream service key; stored in the local config only"
       },
+      "auth_mode": {
+        "label": "Auth Mode",
+        "description": "Guest token needs no key: Amane fetches a short-lived token from the upstream and renews it",
+        "options": {
+          "api_key": "API Key",
+          "guest_token": "Guest Token"
+        }
+      },
       "api_type": {
         "label": "API Type",
         "options": {
