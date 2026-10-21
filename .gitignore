@@ -211,3 +211,7 @@ androidapp/*.keystore
 
 # parley discussion workspaces created by tooling — never track
 .parley/
+
+# 便携工具链 (uv/node/pnpm/just/Python), 体积大且与平台绑定, 不进版本库
+# 换机器请整目录复制, 或用 start.bat bundle 从本机 PATH 重新打包
+/tools/
