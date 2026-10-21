@@ -320,6 +320,10 @@ class StreamClient:
             ),
             follow_redirects=False,
             proxy=proxy,
+            # 代理只认显式传入的 network.proxy. trust_env 会读 urllib.request.getproxies(),
+            # 在 Windows/macOS 上还会回落到系统代理: 播放上游多是回环与局域网地址, 交给系统代理
+            # 要么被拦成 502, 要么把本地码流绕出公网.
+            trust_env=False,
             headers={"Accept-Encoding": "identity"},
         )
         self._gate = UpstreamGate()

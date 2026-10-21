@@ -507,6 +507,37 @@ async def test_upstream_request_errors_do_not_leak_gate_permits() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stream_client_ignores_environment_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    """播放通道不读环境代理, 只认显式传入的 network.proxy.
+
+    httpx 的 ``trust_env`` 会读 ``urllib.request.getproxies()``, 在 Windows/macOS 上
+    还会回落到系统代理. 播放上游多为回环与局域网地址: 交给系统代理会先被拦成 502
+    (端口没监听却拿到 HTTP 错误响应), 或把本地码流绕出公网.
+
+    这里用桩服务器冒充系统代理: 若环境代理被采用, 发往 127.0.0.1:9 的请求会落到桩上
+    并拿到 200, 而不是连接被拒.
+    """
+    server, captured, _cancelled = _serve()
+    monkeypatch.setenv("HTTP_PROXY", _origin(server))
+    monkeypatch.setenv("http_proxy", _origin(server))
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    monkeypatch.delenv("no_proxy", raising=False)
+    stream = StreamClient()
+    try:
+        with pytest.raises(HTTPException) as failure:
+            await stream.fetch_bytes(
+                source_id="acme.play",
+                target=UpstreamPlaybackTarget(url="http://127.0.0.1:9/video"),
+            )
+        assert failure.value.status_code == 502
+        assert failure.value.detail == "播放来源不可达"
+        assert captured == {}
+    finally:
+        await stream.aclose()
+        server.shutdown()
+
+
+@pytest.mark.asyncio
 async def test_malformed_upstream_url_rejected_before_gate() -> None:
     """畸形上游 URL 在取得出口额度之前即被拒绝, 归为 502.
 
