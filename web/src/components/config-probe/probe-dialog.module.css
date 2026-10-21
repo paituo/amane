@@ -6,6 +6,9 @@
  *
  * 颜色一律走 Mantine 变量 + light-dark(); 级别色只染图标, 不染整行 —— 满屏红字会让
  * "一条 error + 三条 info"看起来像全盘失败.
+ *
+ * info 与 ok 用同一个对勾图标 (见 probe-dialog.tsx 的 LEVEL_ICON), 只靠颜色区分:
+ * info 灰 = 背景信息, 不代表问题; ok 绿 = 这一步验证通过.
  */
 
 .log {

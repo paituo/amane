@@ -39,8 +39,13 @@ interface ProbeDialogProps {
 
 type Status = "running" | "done" | "failed";
 
+/**
+ * 级别 → 图标. `info` 与 `ok` 共用对勾: 探针里 info 只用来陈述"这一段配置是什么样的",
+ * 本身不代表问题, 用圆圈叹号会被读成一串警告. 两者的区别只留在颜色上 —— info 走灰
+ * (背景信息), ok 走绿 (这一步验证通过), 失败的仍是黄/红.
+ */
 const LEVEL_ICON: Record<ProbeLevel, typeof IconInfoCircle> = {
-  info: IconInfoCircle,
+  info: IconCircleCheck,
   ok: IconCircleCheck,
   warn: IconAlertTriangle,
   error: IconCircleX,
