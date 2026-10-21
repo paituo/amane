@@ -914,6 +914,12 @@ export type CropAvatarRequest = {
      * 裁切框下边界 (不含)
      */
     bottom: number;
+    /**
+     * Rotation
+     *
+     * 裁切前顺时针旋转的角度 (仅 90° 整数倍); 90° / 270° 后宽高互换
+     */
+    rotation?: 0 | 90 | 180 | 270;
 };
 
 /**
@@ -946,6 +952,12 @@ export type CropPosterRequest = {
      * 裁切框下边界 (不含)
      */
     bottom: number;
+    /**
+     * Rotation
+     *
+     * 裁切前顺时针旋转的角度 (仅 90° 整数倍); 90° / 270° 后宽高互换
+     */
+    rotation?: 0 | 90 | 180 | 270;
 };
 
 /**
@@ -1284,7 +1296,7 @@ export type FacetSortField = 'name' | 'count';
  *
  * summary.json / task report 的 reason 字段.
  */
-export type FailureReason = 'http_error' | 'api_error' | 'not_found' | 'rate_limited' | 'server_error' | 'timeout' | 'network' | 'cloudflare_challenge' | 'cloudflare_blocked' | 'ip_banned' | 'geo_restricted' | 'age_verification' | 'empty_response' | 'no_usable_metadata' | 'parse_error' | 'crawler_unavailable' | 'unexpected';
+export type FailureReason = 'http_error' | 'api_error' | 'not_found' | 'rate_limited' | 'server_error' | 'timeout' | 'network' | 'cloudflare_challenge' | 'cloudflare_blocked' | 'ip_banned' | 'geo_restricted' | 'age_verification' | 'login_required' | 'empty_response' | 'no_usable_metadata' | 'parse_error' | 'crawler_unavailable' | 'unexpected';
 
 /**
  * FeedCreateRequest

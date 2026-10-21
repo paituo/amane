@@ -12,6 +12,7 @@ from amane.plugins.models import SourceCapability
 
 from ...base import CrawlerProfile
 from ...parsing import extract_text, is_same_name, normalize_name
+from ...sites.javdb import reject_login_page
 from ..base import ActorCrawler
 from ..models import ActorMetadata
 
@@ -21,6 +22,8 @@ _BG_URL_RE = re.compile(r"url\(\s*['\"]?(https?://[^)'\"]+)['\"]?\s*\)", re.IGNO
 _PLACEHOLDER_AVATAR_RE = re.compile(r"actor_unknow", re.IGNORECASE)
 # 影片数标注随语言变化; 可能写入 aliases.
 _FILM_COUNT_RE = re.compile(r"\d+\s*(?:部影片|movie\(s\))", re.IGNORECASE)
+# 无码条目的名字带站点标记后缀 ((無碼) / (Uncensored)); 全角括号已由 normalize_name 的 NFKC 折叠归一.
+_UNCENSORED_MARKER_RE = re.compile(r"\s*\((?:無碼|无码|uncensored)\)\s*$", re.IGNORECASE)
 _GENDER_TOKENS: dict[str, ActorGender] = {
     "男優": ActorGender.MALE,
     "男优": ActorGender.MALE,
@@ -47,6 +50,7 @@ class JavDBActorCrawler(ActorCrawler):
         search_url = f"{self.base_url}/search?q={q}&f=actor&locale=zh"
         text = await self.client.get_html(search_url, cookies=self.cookies)
         html = Selector(text=text)
+        reject_login_page(html, url=search_url)
         # 精确命中偶发落到详情页.
         if html.css("span.actor-section-name").get():
             detail = extract_text(html, '//link[@rel="canonical"]/@href')
@@ -55,6 +59,7 @@ class JavDBActorCrawler(ActorCrawler):
 
     async def _scrape(self, url: str) -> ActorMetadata | None:
         text = await self.client.get_html(url, cookies=self.cookies)
+        reject_login_page(Selector(text=text), url=url)
         return parse_javdb_actor_detail(text, page_url=url, base_url=self.base_url)
 
 
@@ -118,7 +123,12 @@ def parse_javdb_actor_detail(html_text: str, *, page_url: str, base_url: str) ->
 def _split_names(raw: str) -> list[str]:
     if not raw:
         return []
-    return [p for p in (normalize_name(part) for part in re.split(r"[,，]", raw)) if p]
+    names: list[str] = []
+    for part in re.split(r"[,，]", raw):
+        name = _UNCENSORED_MARKER_RE.sub("", normalize_name(part))
+        if name:
+            names.append(name)
+    return names
 
 
 def _dedupe_preserve(values: list[str]) -> list[str]:

@@ -103,10 +103,14 @@ safe-outputs:
   staged: ${{ inputs.dry_run }}
   # 默认会在 run 失败时自动开 issue (如 "produced no safe outputs"), 这里关掉.
   report-failure-as-issue: false
+  # issue-intent 会附带 rationale/confidence/suggest 元数据, GitHub 据此按仓库自动化
+  # 级别处理变更: 默认 Cautious 只放行 HIGH, 其余停留在 issue 页的待审建议面板, 标签
+  # 不生效而评论照发. 本流程不接受人工复核, 关闭该元数据, 使变更直接生效.
   # 两个白名单是正文全部标签动作的权限边界: gh-aw 丢弃未列入的标签, 只记录
   # "No labels to add", 消息仍计为成功, 整条 run 保持绿色. 正文新增标签动作时
   # 必须同步这里.
   add-labels:
+    issue-intent: false
     allowed:
       - kind:bug
       - kind:feature
