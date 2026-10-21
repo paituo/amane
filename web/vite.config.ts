@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import legacy from "@vitejs/plugin-legacy";
@@ -80,9 +81,41 @@ export default defineConfig({
   server: {
     proxy: {
       "/api": {
-        target: process.env.VITE_API_URL || "http://localhost:8000",
+        // 显式用 127.0.0.1: 与 uvicorn 监听地址一致, 避开 localhost 优先解析到 ::1 (IPv6) 而 uvicorn 仅监听 IPv4 的隐患.
+        target: process.env.VITE_API_URL || "http://127.0.0.1:8000",
         changeOrigin: true,
         ws: true,
+        configure: (proxy) => {
+          // 启动竞态: vite 通常先于 uvicorn 就绪, 首屏 /api 请求会在后端端口尚未监听时命中 ECONNREFUSED.
+          // 这里对连接类错误做有限次重试 (每 200ms, 上限 5s), 让首屏对后端启动时延无感; 超时再回 502.
+          // ws upgrade 走独立通道, 不参与重试, 避免误用 proxy.web 处理升级请求.
+          const baseTarget = process.env.VITE_API_URL || "http://127.0.0.1:8000";
+          let attempts = 0;
+          const MAX_ATTEMPTS = 25;
+          proxy.on("error", (err: Error, req: IncomingMessage, res: ServerResponse) => {
+            const code = (err as NodeJS.ErrnoException).code;
+            if (
+              (code === "ECONNREFUSED" || code === "ENOTFOUND") &&
+              !req.headers.upgrade &&
+              attempts < MAX_ATTEMPTS
+            ) {
+              attempts += 1;
+              setTimeout(() => {
+                try {
+                  proxy.web(req, res, { target: baseTarget });
+                } catch {
+                  // 重试窗口内客户端连接已关闭, 忽略
+                }
+              }, 200);
+              return;
+            }
+            // ws upgrade 失败时 res 实为 socket, 不回 HTTP 状态, 交给 http-proxy 自身处理.
+            if (!req.headers.upgrade && !res.headersSent) {
+              res.writeHead(502);
+              res.end("Backend not reachable");
+            }
+          });
+        },
       },
     },
   },
