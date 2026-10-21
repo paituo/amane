@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Response
 from ...db.models import TaskType
 from ...handlers import RefreshPayload, ScanMode
 from ...utils.model import to_resp
-from ..deps import RepoDep, RuntimeDep
+from ..deps import ConfigDep, RepoDep, RuntimeDep
 from ..models import (
     LibraryCreateRequest,
     LibraryListResponse,
@@ -27,9 +27,9 @@ router = APIRouter(prefix="/libraries", tags=["libraries"])
 
 
 @router.get("/path-template-schema")
-async def get_path_template_schema() -> PathTemplateSchemaResponse:
-    """与 resolve_paths 同源."""
-    return path_template_schema()
+async def get_path_template_schema(config: ConfigDep) -> PathTemplateSchemaResponse:
+    """与 resolve_paths 同源; 链接默认值落在本机数据目录下."""
+    return path_template_schema(config.cold.data_dir)
 
 
 @router.get("")

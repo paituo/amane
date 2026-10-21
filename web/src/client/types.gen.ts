@@ -3122,6 +3122,10 @@ export type PathTemplateSchemaResponse = {
      * Video Default
      */
     video_default: string;
+    /**
+     * Link Default
+     */
+    link_default: string;
     optional_defaults: OptionalPathTemplateDefaults;
     /**
      * Placeholders

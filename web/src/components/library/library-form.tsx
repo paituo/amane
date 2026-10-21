@@ -122,7 +122,7 @@ export function emptyLibraryForm(schema?: PathTemplateSchemaResponse | null): Li
     recursive: true,
     patterns: "",
     move_mode: "move",
-    link_template: "",
+    link_template: schema?.link_default ?? "",
     link_mode: "strm",
     strm_content_template: "",
     write_nfo: true,
@@ -317,7 +317,13 @@ export function LibraryFormFields({ value, onChange, showCreateOnly }: LibraryFo
                 onChange({
                   ...value,
                   ingest,
-                  cloud_path: ingest === "native" ? "" : value.cloud_path,
+                  // 虚拟路径只属于 clouddrive; 切到其余方式一律丢弃, 与后端 resolve_ingest_cloud_path 同口径.
+                  cloud_path: ingest === "clouddrive" ? value.cloud_path : "",
+                  // 外部来源默认产 STRM: 链接模板被清空过就补回默认值, 否则附属资源会写回源目录.
+                  link_template:
+                    value.link_template.trim() === "" && ingest !== "native"
+                      ? (schema?.link_default ?? "")
+                      : value.link_template,
                 })
               }
               getLabel={(kind) => t(`ingest.${kind}`)}
@@ -435,7 +441,7 @@ export function LibraryFormFields({ value, onChange, showCreateOnly }: LibraryFo
       <TemplateInput
         label={t("fieldLinkTemplate")}
         description={t("fieldLinkTemplateHint")}
-        placeholder={t("fieldLinkTemplatePlaceholder")}
+        placeholder={schema?.link_default ?? t("fieldLinkTemplatePlaceholder")}
         catalog={catalog}
         value={value.link_template}
         onChange={(e) => onChange({ ...value, link_template: e.currentTarget.value })}

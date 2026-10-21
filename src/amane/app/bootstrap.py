@@ -44,19 +44,26 @@ def build_safe_dirs(cold: ColdSettings, repo_watch_paths: list[str]) -> list[Pat
 
     优先级: ``ALLOW_ALL`` (无限制, 返回 None) > ``AMANE_SAFE_DIRS`` 路径列表 > 启动时已有 library 路径.
     返回空列表表示已配置但没有可用根 (调用方应拒绝路径), 与 None 不同.
+
+    ``data_dir`` 始终追加为可信根: 默认链接模板把 STRM 与刮削产物落在数据目录下,
+    否则显式配置 ``AMANE_SAFE_DIRS`` 时默认模板会被判越界.
     """
     explicit = cold.safe_dirs
     if explicit == SAFE_DIRS_ALLOW_ALL:
         return None
     if explicit is not None:
-        return [d.expanduser().resolve() for d in explicit if d.expanduser().resolve().is_dir()]
-
-    dirs: set[Path] = set()
-    for wp_path in repo_watch_paths:
-        p = Path(wp_path).resolve()
-        if p.is_dir():
-            dirs.add(p)
-    return list(dirs)
+        dirs = [d.expanduser().resolve() for d in explicit if d.expanduser().resolve().is_dir()]
+    else:
+        collected: set[Path] = set()
+        for wp_path in repo_watch_paths:
+            p = Path(wp_path).resolve()
+            if p.is_dir():
+                collected.add(p)
+        dirs = list(collected)
+    data_dir = cold.data_dir.expanduser().resolve()
+    if data_dir.is_dir() and data_dir not in dirs:
+        dirs.append(data_dir)
+    return dirs
 
 
 @dataclass

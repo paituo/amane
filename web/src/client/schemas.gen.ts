@@ -3973,7 +3973,7 @@ export const LibraryCreateRequestSchema = {
         video_template: {
             type: 'string',
             title: 'Video Template',
-            default: '{studio}/{number}/{number}[-CD{cd?}][-{sub?}].{ext}'
+            default: '[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}].{ext}'
         },
         link_template: {
             anyOf: [
@@ -6223,6 +6223,10 @@ export const PathTemplateSchemaResponseSchema = {
             type: 'string',
             title: 'Video Default'
         },
+        link_default: {
+            type: 'string',
+            title: 'Link Default'
+        },
         optional_defaults: {
             $ref: '#/components/schemas/OptionalPathTemplateDefaults'
         },
@@ -6244,6 +6248,7 @@ export const PathTemplateSchemaResponseSchema = {
     type: 'object',
     required: [
         'video_default',
+        'link_default',
         'optional_defaults',
         'placeholders',
         'subtitle_extensions_default'

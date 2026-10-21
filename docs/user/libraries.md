@@ -12,6 +12,7 @@
 
 - **本地文件** (默认): 使用操作系统文件事件. 适用于本机磁盘、以及能产生创建事件的挂载.
 - **CD2 webhook**: 接收 CloudDrive2 的文件通知 webhook, 不监听挂载路径. Webhook 需 CloudDrive2 会员; 性能好于监听挂载路径.
+- **Everything** (仅 Windows): 按 Everything 索引周期枚举该库, 不监听文件系统. 需要本机运行 Everything (官方 CLI `es.exe` 随其安装). 只发现新增文件; 删除与移动仍靠手动扫描或整理任务收敛.
 
 CD2 webhook 库须同时填写:
 
@@ -71,6 +72,7 @@ Authorization = "Bearer <Amane API Token>"
 | `{number}` | 番号 | `MIDV-123` |
 | `{prefix}` | 番号前缀 | `MIDV` |
 | `{suffix}` | 番号去掉前缀后的剩余段 | `123` |
+| `{library}` | 库显示名, 用于按库名分子目录落盘 | `AV2_Output` |
 | `{title}` | 标题 | `Title Here` |
 | `{actor}` | 第一位演员 | `Actor1` |
 | `{actors}` | 演员 (逗号分隔) | `Actor1,Actor2` |
@@ -117,13 +119,26 @@ Authorization = "Bearer <Amane API Token>"
 ### 默认模板
 
 ```
-视频: {studio}/{number}/{number}[-CD{cd?}][-{sub?}].{ext}
-封面: {link_dir}/thumb.jpg
-海报: {link_dir}/poster.jpg
+视频: [{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}].{ext}
+链接: <数据目录>/{library}/[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}]
+封面: {link_dir}/{video_name}-thumb.jpg
+海报: {link_dir}/{video_name}-poster.jpg
+背景图: {link_dir}/{video_name}-fanart.jpg
+剧照: {link_dir}/extrafanart
 NFO: {link_dir}/{video_name}.nfo
 预告片: {link_dir}/trailer.mp4
 字幕: {link_dir}/{raw_srt_name}.{ext}
 ```
+
+这套默认值取自真实媒体盘的实测布局 (Everything 索引抽样 8325 个文件 / 1628 个含视频目录):
+
+- `{prefix}/{number}/` 分目录, 目录名只由番号前缀与番号决定, 不带任何后缀;
+- 所有后缀只进文件名: 分集 (`DVDMS-074-CD1.mkv` 在 `DVDMS-074/` 下) 与中字 `-C` (`ADN-234-C.mp4` 同在 `ADN-234/` 下) 都不改变目录;
+- NFO 跟随视频名 (99%), 配套图 `-poster.jpg` / `-thumb.jpg` 用视频名做前缀 (1454 / 1392 个), 固定名 `poster.jpg` / `thumb.jpg` 是早期遗留 (763 / 431 个)。
+
+新建库时表单会预填这些值; `链接` 一行由后端按本机数据目录拼出绝对路径, 只写在本地, 不落到库内。
+
+附属文件的默认模板全部以 `{link_dir}` 为父目录. 未设置链接模板时 `{link_dir}` 等于 `{video_dir}`, 附属文件与视频同目录; 设置链接模板后跟随链接文件所在目录.
 
 ### 可选组语法
 
@@ -186,6 +201,8 @@ NFO: {link_dir}/{video_name}.nfo
 - 本地创建 STRM/符号链接 + NFO/海报/字幕等
 - 媒体服务器 Emby/Jellyfin 添加本地媒体库即可
 
+`link_template` 必须解析到库根之外, 且只能使用绝对路径. 链接目录位于另一个磁盘或卷时, 该目录须列入 `AMANE_SAFE_DIRS` (环境变量, 逗号分隔, 修改后重启生效), 否则整理时抛出路径越界错误. 显式设置 `AMANE_SAFE_DIRS` 后, 新建与修改媒体库的路径同样须位于其中; 未设置时边界由启动时已存在的媒体库路径推导.
+
 库外这一份不归 Amane 清理: 在媒体库里删除视频只会删掉库内的文件, 库外链接树里的 strm 与 NFO / 图片会留在原处, 需要自己清理.
 
 `strm_content_template` 用于设置 STRM 文件的内容模板. 默认情况下, STRM 会写入原视频文件的绝对路径,
@@ -196,6 +213,36 @@ https://example.com/{video_relpath} -> https://example.com/ABC-123/ABC-123.mp4
 ```
 
 ### 使用场景
+
+#### 云盘只读源: 只规范化本地, 不改云盘
+
+库路径指向云盘挂载点 (或 `ingest=everything` 直接读 Everything 索引) 时, 云盘侧应当**只读**. 规范化的对象只有本地那一份:
+
+| 对象 | 落在哪里 | 云盘是否被改 |
+| -------- | -------- | -------- |
+| STRM 文件 | `link_template` 指定的本地目录 | 否 |
+| NFO / 海报 / 封面 / 背景图 / 剧照 | 跟随 `{link_dir}` (即 STRM 所在目录) | 否 |
+| 外挂字幕 | 跟随 `{link_dir}` | 否 |
+| 视频本体 | `video_template` 落点 | **仅 `auto_organize` 开启时才可能被移动** |
+
+默认模板把目录固定为 `{prefix}/{number}`, 一切后缀 (中字 `-C`、分集 `-CD1`) 只进文件名:
+
+```
+源:   Z:\115\AV2_Output\ADN\ADN-234-C\ADN-234-C.mp4
+落点: Z:\115\AV2_Output\ADN\ADN-234\ADN-234-C.mp4        (仅在开启 auto_organize 时才会搬)
+STRM: <数据目录>\AV2_Output\ADN\ADN-234\ADN-234-C.strm
+NFO:  <数据目录>\AV2_Output\ADN\ADN-234\ADN-234-C.nfo
+```
+
+`-C` 表示中字, 从**源文件名**识别 (`-C` / `-UC`), 不依赖同目录是否已下载字幕. 它只体现在文件名上, 不进入目录层级: 中字是文件的属性, 不该把同一个番号拆成两个目录.
+
+**注意**: 源盘本身有 83.1% (1353/1628) 的目录名是带 `-C` 的, 而默认模板会把它们规范成不带 `-C` 的目录. 也就是说 **默认模板对云盘源不是幂等操作** —— 开着 `auto_organize` 整理一次, 云盘上这些目录就会被改名. 想让目录也跟随源盘 (带 `-C`), 把 `video_template` 写成 `[{prefix}/]{number}[-{sub?}]/{number}[-CD{cd?}][-{sub?}].{ext}` 即可, 此时落点与源完全一致.
+
+三条硬约束:
+
+1. `link_template` 必须指向库外; 默认值落在 `<数据目录>/<库名>/...`, 数据目录会自动计入 `AMANE_SAFE_DIRS`, 不需要手工追加.
+2. 留空 `link_template` 时不创建 STRM, `{link_dir}` 回退成 `{video_dir}` —— 此时 NFO 与图片会写进云盘目录. 云盘库务必保留默认链接模板.
+3. 云盘库必须保持 `auto_organize` 关闭 (默认). 只生成 STRM 与配套文件时, 云盘侧不会产生任何写入; `move_mode` 对未开启整理的库无实际作用.
 
 ## 整理操作
 
@@ -222,10 +269,10 @@ Amane 支持自动识别分集文件名, 目前支持以下几种常见标记:
 - `-A`, `-B` — 字母分集 (`-C` 与中字冲突, 不支持)
 - `-1` 到 `-9` — 尾部数字分集
 
-检测到的分集编号通过 `{cd?}` 占位符填入, 在模板中用可选组控制是否出现. 例如默认模板 `{studio}/{number}/{number}[-CD{cd?}].{ext}`:
+检测到的分集编号通过 `{cd?}` 占位符填入, 在模板中用可选组控制是否出现. 例如默认模板 `[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}].{ext}`:
 
-- 源文件 `MIDV-123-CD2.mp4` → `Studio Name/MIDV-123/MIDV-123-CD2.mp4`
-- 源文件 `MIDV-123.mp4` (无分集) → `Studio Name/MIDV-123/MIDV-123.mp4`
+- 源文件 `MIDV-123-CD2.mp4` → `MIDV/MIDV-123/MIDV-123-CD2.mp4`
+- 源文件 `MIDV-123.mp4` (无分集) → `MIDV/MIDV-123/MIDV-123.mp4`
 
 ## 字幕文件
 

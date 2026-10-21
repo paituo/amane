@@ -5417,7 +5417,7 @@
           "libraries"
         ],
         "summary": "Get Path Template Schema",
-        "description": "与 resolve_paths 同源.",
+        "description": "与 resolve_paths 同源; 链接默认值落在本机数据目录下.",
         "operationId": "get_path_template_schema",
         "responses": {
           "200": {
@@ -10215,7 +10215,7 @@
           "video_template": {
             "type": "string",
             "title": "Video Template",
-            "default": "{studio}/{number}/{number}[-CD{cd?}][-{sub?}].{ext}"
+            "default": "[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}].{ext}"
           },
           "link_template": {
             "anyOf": [
@@ -12428,6 +12428,10 @@
             "type": "string",
             "title": "Video Default"
           },
+          "link_default": {
+            "type": "string",
+            "title": "Link Default"
+          },
           "optional_defaults": {
             "$ref": "#/components/schemas/OptionalPathTemplateDefaults"
           },
@@ -12449,6 +12453,7 @@
         "type": "object",
         "required": [
           "video_default",
+          "link_default",
           "optional_defaults",
           "placeholders",
           "subtitle_extensions_default"

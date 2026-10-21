@@ -132,10 +132,10 @@
     "symlink": "Symbolic Link"
   },
   "fieldVideoTemplate": "Video Path Template",
-  "fieldVideoTemplateHint": "Relative or absolute path; see placeholder badges below",
+  "fieldVideoTemplateHint": "Relative or absolute. Placeholders are listed below. Defaults group by number prefix; subtitle and CD suffixes stay in the file name only",
   "fieldLinkTemplate": "Link Path Template",
-  "fieldLinkTemplateHint": "Organize creates an STRM file or symbolic link here. Must be an absolute path outside the library",
-  "fieldLinkTemplatePlaceholder": "e.g. /local/emby/{studio}/{number}/{number}.{ext}",
+  "fieldLinkTemplateHint": "STRM files or symlinks are created here during organize. Must be an absolute path outside the library; leave empty to skip links (sidecars then go to the source directory)",
+  "fieldLinkTemplatePlaceholder": "e.g. /local/emby/{library}/{prefix}/{number}/{number}.strm",
   "fieldLinkMode": "Link Mode",
   "linkMode": {
     "strm": "STRM file",
@@ -175,13 +175,14 @@
       "content_type": "Content type",
       "def?": "[optional] Resolution (from filename)",
       "cd?": "[optional] Part number",
-      "sub?": "[optional] Subtitle status",
+      "sub?": "[optional] Subtitle marker. Set to C when the file name carries -C",
       "video_dir": "Directory of the rendered video. Link and sidecar templates",
       "video_name": "Rendered video filename (no extension). Link and sidecar templates",
       "video_relpath": "Rendered video path relative to the library root. Link, sidecar, and STRM content templates",
       "link_dir": "Directory of the link; same as {video_dir} when the link template is unset",
       "link_name": "Rendered link filename (no extension); same as {video_name} when the link template is unset",
-      "raw_srt_name": "Source subtitle filename. e.g. A/foo.zh.srt → foo.zh"
+      "raw_srt_name": "Source subtitle filename. e.g. A/foo.zh.srt → foo.zh",
+      "library": "Library name. Used to nest output under a per-library directory"
     }
   },
   "tpl": {

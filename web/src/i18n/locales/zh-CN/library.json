@@ -130,10 +130,10 @@
     "symlink": "符号链接"
   },
   "fieldVideoTemplate": "视频路径模板",
-  "fieldVideoTemplateHint": "可使用相对或绝对路径, 可用占位符见下方徽章",
+  "fieldVideoTemplateHint": "可使用相对或绝对路径, 可用占位符见下方徽章. 默认按番号前缀分目录, 中字与分集后缀只进文件名",
   "fieldLinkTemplate": "链接路径模板",
-  "fieldLinkTemplateHint": "整理时在此路径创建 STRM 文件或符号链接. 必须是库外的绝对路径",
-  "fieldLinkTemplatePlaceholder": "例如 /local/emby/{studio}/{number}/{number}.{ext}",
+  "fieldLinkTemplateHint": "整理时在此路径创建 STRM 文件或符号链接. 必须是库外的绝对路径; 留空则不创建链接, 附属资源会写回源目录",
+  "fieldLinkTemplatePlaceholder": "例如 /local/emby/{library}/{prefix}/{number}/{number}.strm",
   "fieldLinkMode": "链接方式",
   "linkMode": {
     "strm": "STRM 文件",
@@ -173,13 +173,14 @@
       "content_type": "内容类型",
       "def?": "[可空]分辨率(文件名检测)",
       "cd?": "[可空]分集序号",
-      "sub?": "[可空]字幕情况",
+      "sub?": "[可空]字幕情况. 文件名带 -C 时取值 C",
       "video_dir": "整理后视频所在目录. 链接模板与附属资源模板可用",
       "video_name": "整理后视频文件名 (不含扩展名). 链接模板与附属资源模板可用",
       "video_relpath": "整理后视频相对库根目录的路径. 链接模板、附属资源模板与 STRM 内容模板可用",
       "link_dir": "链接所在目录; 未设置链接模板时同 {video_dir}",
       "link_name": "整理后链接文件名 (不含扩展名); 未设置链接模板时同 {video_name}",
-      "raw_srt_name": "字幕源文件名. 例 A/foo.zh.srt → foo.zh"
+      "raw_srt_name": "字幕源文件名. 例 A/foo.zh.srt → foo.zh",
+      "library": "库名称. 用于按库名分子目录落盘"
     }
   },
   "tpl": {

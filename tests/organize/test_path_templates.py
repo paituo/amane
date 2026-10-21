@@ -15,6 +15,7 @@ from amane.db.models import Library, Metadata
 from amane.enums import ActorGender, LinkMode
 from amane.organize import (
     VIDEO_TEMPLATE_DEFAULT,
+    link_template_default,
     normalize_link_template,
     render_path_template,
     resolve_paths,
@@ -76,12 +77,12 @@ class _RenderCase(NamedTuple):
 
 # 模板 + 源文件 → 整理后相对库根目录的路径. 标记来自 source; metadata 字段来自 _meta, 可由 meta 覆盖.
 RENDER_CASES: tuple[_RenderCase, ...] = (
-    # --- 默认模板: [-CD{cd?}][-{sub?}] 两个并列组 ---
-    _RenderCase("MIDV-123.mp4", VIDEO_TEMPLATE_DEFAULT, "StudioX/ABC-123/ABC-123.mp4"),
-    _RenderCase("MIDV-123-CD1.mp4", VIDEO_TEMPLATE_DEFAULT, "StudioX/ABC-123/ABC-123-CD1.mp4"),
-    _RenderCase("MIDV-123-C.mp4", VIDEO_TEMPLATE_DEFAULT, "StudioX/ABC-123/ABC-123-C.mp4"),
-    _RenderCase("MIDV-123-CD1-C.mp4", VIDEO_TEMPLATE_DEFAULT, "StudioX/ABC-123/ABC-123-CD1-C.mp4"),
-    _RenderCase("MIDV-123-UC.mp4", VIDEO_TEMPLATE_DEFAULT, "StudioX/ABC-123/ABC-123-C.mp4"),
+    # --- 默认模板: 前缀分目录, 后缀 (CD / 中字) 一律只进文件名 ---
+    _RenderCase("MIDV-123.mp4", VIDEO_TEMPLATE_DEFAULT, "ABC/ABC-123/ABC-123.mp4"),
+    _RenderCase("MIDV-123-CD1.mp4", VIDEO_TEMPLATE_DEFAULT, "ABC/ABC-123/ABC-123-CD1.mp4"),
+    _RenderCase("MIDV-123-C.mp4", VIDEO_TEMPLATE_DEFAULT, "ABC/ABC-123/ABC-123-C.mp4"),
+    _RenderCase("MIDV-123-CD1-C.mp4", VIDEO_TEMPLATE_DEFAULT, "ABC/ABC-123/ABC-123-CD1-C.mp4"),
+    _RenderCase("MIDV-123-UC.mp4", VIDEO_TEMPLATE_DEFAULT, "ABC/ABC-123/ABC-123-C.mp4"),
     # --- 单占位符可选组: 空则连字面量一起省略 ---
     _RenderCase("MIDV-123-CD2.mp4", "{number}/{number}[-Part {cd?}].{ext}", "ABC-123/ABC-123-Part 2.mp4"),
     _RenderCase("MIDV-123.mp4", "{number}/{number}[-Part {cd?}].{ext}", "ABC-123/ABC-123.mp4"),
@@ -346,21 +347,21 @@ class TestResolvePathsDefaults:
         meta = _meta()
         result = resolve_paths(wp, meta, ext="mp4")
 
-        assert result.thumb == media / "StudioX" / "ABC-123" / "thumb.jpg"
+        assert result.thumb == media / "StudioX" / "ABC-123" / "ABC-123-thumb.jpg"
 
     def test_poster_default(self, media: Path):
         wp = Library(name="t", path=str(media), video_template="{studio}/{number}/{number}.{ext}")
         meta = _meta()
         result = resolve_paths(wp, meta, ext="mp4")
 
-        assert result.poster == media / "StudioX" / "ABC-123" / "poster.jpg"
+        assert result.poster == media / "StudioX" / "ABC-123" / "ABC-123-poster.jpg"
 
     def test_fanart_default(self, media: Path):
         wp = Library(name="t", path=str(media), video_template="{studio}/{number}/{number}.{ext}")
         meta = _meta()
         result = resolve_paths(wp, meta, ext="mp4")
 
-        assert result.fanart == media / "StudioX" / "ABC-123" / "fanart.jpg"
+        assert result.fanart == media / "StudioX" / "ABC-123" / "ABC-123-fanart.jpg"
 
     def test_extrafanart_default(self, media: Path):
         wp = Library(name="t", path=str(media), video_template="{studio}/{number}/{number}.{ext}")
@@ -468,7 +469,7 @@ class TestResolvePathsEdgeCases:
         result = resolve_paths(wp, meta, ext="mp4", safe_dirs=[other])
 
         # video_dir should be other/ABC-123/
-        assert result.thumb == other / "ABC-123" / "thumb.jpg"
+        assert result.thumb == other / "ABC-123" / "ABC-123-thumb.jpg"
 
     def test_year_variable(self, media: Path):
         wp = Library(name="t", path=str(media), video_template="{year}/{number}/{number}.{ext}")
@@ -593,7 +594,7 @@ class TestPathTraversalProtection:
         result = resolve_paths(wp, _meta(), ext="mp4")
 
         assert result.video == media / "StudioX" / "ABC-123" / "ABC-123.mp4"
-        assert result.thumb == media / "StudioX" / "ABC-123" / "thumb.jpg"
+        assert result.thumb == media / "StudioX" / "ABC-123" / "ABC-123-thumb.jpg"
         assert result.nfo == media / "StudioX" / "ABC-123" / "ABC-123.nfo"
 
     def test_in_library_file_symlink_keeps_lexical_video_dir(self, media: Path):
@@ -602,14 +603,14 @@ class TestPathTraversalProtection:
         src = media / "incoming" / "ABC-123.mp4"
         src.parent.mkdir()
         src.write_bytes(b"x")
-        dest_dir = media / "StudioX" / "ABC-123"
+        dest_dir = media / "ABC" / "ABC-123"
         dest_dir.mkdir(parents=True)
         dest = dest_dir / "ABC-123.mp4"
         dest.symlink_to(src)
         wp = Library(name="t", path=str(media), video_template=VIDEO_TEMPLATE_DEFAULT)
         result = resolve_paths(wp, _meta(), ext="mp4")
         assert result.video == dest
-        assert result.thumb == dest_dir / "thumb.jpg"
+        assert result.thumb == dest_dir / "ABC-123-thumb.jpg"
         assert result.nfo == dest_dir / "ABC-123.nfo"
 
     def test_dir_symlink_escaping_library_rejected(self, media: Path, etc: Path):
@@ -627,7 +628,7 @@ class TestPathTraversalProtection:
         etc.mkdir()
         outside = etc / "secret.mp4"
         outside.write_bytes(b"x")
-        dest_dir = media / "StudioX" / "ABC-123"
+        dest_dir = media / "ABC" / "ABC-123"
         dest_dir.mkdir(parents=True)
         (dest_dir / "ABC-123.mp4").symlink_to(outside)
         wp = Library(name="t", path=str(media), video_template=VIDEO_TEMPLATE_DEFAULT)
@@ -671,7 +672,7 @@ class TestResolvePathsLink:
         assert result.video == media / "StudioX" / "ABC-123" / "ABC-123.mp4"
         assert result.link == other / "StudioX" / "ABC-123" / "ABC-123.strm"
         assert result.nfo == other / "StudioX" / "ABC-123" / "ABC-123.nfo"
-        assert result.poster == other / "StudioX" / "ABC-123" / "poster.jpg"
+        assert result.poster == other / "StudioX" / "ABC-123" / "ABC-123-poster.jpg"
 
     def test_symlink_keeps_video_extension(self, media: Path, other: Path):
         wp = Library(
@@ -1223,3 +1224,99 @@ def test_resolve_paths_uses_actress_placeholder(media: Path) -> None:
         actor_genders={"F": ActorGender.FEMALE, "M": ActorGender.MALE},
     )
     assert result.video == media / "F" / "ABC-123.mp4"
+
+
+class TestLibraryPlaceholder:
+    """`{library}`: 库显示名, 供"落盘按库名分子目录"的模板使用."""
+
+    def test_relative_template_uses_library_name(self, media: Path) -> None:
+        wp = Library(name="AV2_Output", path=str(media), video_template="{library}/{number}.{ext}")
+        result = resolve_paths(wp, _meta(), ext="mp4")
+        assert result.video == media / "AV2_Output" / "ABC-123.mp4"
+
+    def test_absolute_link_template_uses_library_name(self, media: Path, other: Path) -> None:
+        wp = Library(
+            name="AV2_Output",
+            path=str(media),
+            video_template=VIDEO_TEMPLATE_DEFAULT,
+            link_template=str(other / "{library}" / "{number}" / "{number}"),
+        )
+        result = resolve_paths(wp, _meta(), ext="mp4", safe_dirs=[other])
+        assert result.link == other / "AV2_Output" / "ABC-123" / "ABC-123.strm"
+
+    def test_library_name_is_sanitized(self, media: Path) -> None:
+        """库名里的目录分隔符不能逃出模板层级."""
+        wp = Library(name="a/b:c", path=str(media), video_template="{library}/{number}.{ext}")
+        result = resolve_paths(wp, _meta(), ext="mp4")
+        assert result.video.parent.parent == media
+
+    def test_unknown_when_not_injected(self) -> None:
+        ctx = TemplateContext.from_metadata(_meta())
+        assert ctx.variables["library"] == "Unknown"
+
+
+class TestCloudLayoutDefaults:
+    """默认模板与"云盘只读源"的真实布局同构: 整理对源目录是幂等的."""
+
+    @pytest.mark.parametrize(
+        ("source", "expected"),
+        [
+            ("ADN-234-C.mp4", "ABC/ABC-123/ABC-123-C.mp4"),
+            ("ADN-234-CD1.mp4", "ABC/ABC-123/ABC-123-CD1.mp4"),
+            ("ADN-234.mp4", "ABC/ABC-123/ABC-123.mp4"),
+        ],
+        ids=["subtitle-suffix-in-file", "cd-only-in-file", "plain"],
+    )
+    def test_video_default_matches_source_layout(self, media: Path, source: str, expected: str) -> None:
+        """所有后缀只进文件名, 目录固定为 {prefix}/{number} (云盘 1628/1628 视频都在同号目录下)."""
+        wp = Library(name="t", path=str(media), video_template=VIDEO_TEMPLATE_DEFAULT)
+        result = resolve_paths(wp, _meta(), ext="mp4", file_info=parse_file_info(source))
+        assert result.video == media.joinpath(*expected.split("/"))
+
+    def test_sidecar_defaults_follow_video_name(self, media: Path) -> None:
+        """配套图跟随视频名: 与 `DVDMS-074-CD1-poster.jpg` 这类带分集名的样本一致."""
+        wp = Library(name="t", path=str(media), video_template=VIDEO_TEMPLATE_DEFAULT)
+        result = resolve_paths(wp, _meta(), ext="mp4")
+        d = media / "ABC" / "ABC-123"
+        assert result.thumb == d / "ABC-123-thumb.jpg"
+        assert result.poster == d / "ABC-123-poster.jpg"
+        assert result.fanart == d / "ABC-123-fanart.jpg"
+        assert result.nfo == d / "ABC-123.nfo"
+
+    def test_link_default_template_is_absolute_and_keeps_subtitle_marker(self, media: Path, other: Path) -> None:
+        """默认链接模板落在库外: 目录不含 `-C`, 中字标记只体现在文件名上."""
+        wp = Library(
+            name="AV2_Output",
+            path=str(media),
+            video_template=VIDEO_TEMPLATE_DEFAULT,
+            link_template=link_template_default(other),
+        )
+        result = resolve_paths(wp, _meta(), ext="mp4", file_info=parse_file_info("ADN-234-C.mp4"), safe_dirs=[other])
+        assert result.link == other / "AV2_Output" / "ABC" / "ABC-123" / "ABC-123-C.strm"
+        assert result.nfo == other / "AV2_Output" / "ABC" / "ABC-123" / "ABC-123-C.nfo"
+
+
+class TestPathTemplateSchema:
+    """接口下发的默认值必须能被 Parser 解析, 且链接默认值落在库外的数据目录."""
+
+    def test_link_default_points_into_data_dir(self, tmp_path: Path) -> None:
+        from amane.api.models.libraries import path_template_schema
+
+        schema = path_template_schema(tmp_path / "data")
+        assert schema.link_default.startswith((tmp_path / "data").resolve().as_posix())
+        assert "{library}" in schema.link_default
+
+    def test_all_defaults_are_parseable(self, tmp_path: Path) -> None:
+        from amane.api.models.libraries import path_template_schema
+
+        schema = path_template_schema(tmp_path / "data")
+        validate_path_template(schema.video_default)
+        validate_path_template(schema.link_default)
+        for value in schema.optional_defaults.model_dump().values():
+            validate_path_template(value)
+
+    def test_library_placeholder_is_announced(self, tmp_path: Path) -> None:
+        from amane.api.models.libraries import path_template_schema
+
+        names = {p.name for p in path_template_schema(tmp_path / "data").placeholders}
+        assert "library" in names

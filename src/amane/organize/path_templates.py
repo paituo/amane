@@ -30,15 +30,32 @@ class ResolvedPaths:
     link: Path | None = None
 
 
-VIDEO_TEMPLATE_DEFAULT = "{studio}/{number}/{number}[-CD{cd?}][-{sub?}].{ext}"
-THUMB_TEMPLATE_DEFAULT = "{link_dir}/thumb.jpg"
-POSTER_TEMPLATE_DEFAULT = "{link_dir}/poster.jpg"
-FANART_TEMPLATE_DEFAULT = "{link_dir}/fanart.jpg"
+# 默认值对齐 "云盘只读源" 的真实布局 (Everything 索引抽样 8325 文件 / 1628 含视频目录):
+#   目录 `{prefix}/{number}/`, 视频 `{number}[-CDn][-C].{ext}`.
+#   实测 1618/1628 目录名 == 视频名; 所有后缀 (CD 分集、`-C` 中字) 一律只进文件名,
+#   目录只由 `{prefix}/{number}` 决定 (DVDMS-074-CD1.mkv 在 DVDMS-074/ 下).
+# 与源布局同构的直接效果: 即便误开 auto_organize, 渲染出的路径就是文件原地,
+# 整理退化为幂等操作, 不会在云盘上改名或搬家.
+VIDEO_TEMPLATE_DEFAULT = "[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}].{ext}"
+# 配套产物跟随视频名 (云盘实测: `-poster.jpg` 1454 / `-thumb.jpg` 1392 / `-fanart.jpg` 57,
+# 固定名 `poster.jpg` 763 / `thumb.jpg` 431 是早期遗留). `{video_name}` 含 CD / 中字标记,
+# 与 `DVDMS-074-CD1-poster.jpg` 这类带分集名的样本一致.
+THUMB_TEMPLATE_DEFAULT = "{link_dir}/{video_name}-thumb.jpg"
+POSTER_TEMPLATE_DEFAULT = "{link_dir}/{video_name}-poster.jpg"
+FANART_TEMPLATE_DEFAULT = "{link_dir}/{video_name}-fanart.jpg"
 EXTRAFANART_TEMPLATE_DEFAULT = "{link_dir}/extrafanart"
 # 媒体服务器按视频文件名匹配 NFO, 所以默认跟随 {video_name} (含 CD / 中字段).
 NFO_TEMPLATE_DEFAULT = "{link_dir}/{video_name}.nfo"
 TRAILER_TEMPLATE_DEFAULT = "{link_dir}/trailer.mp4"
 SUBTITLE_TEMPLATE_DEFAULT = "{link_dir}/{raw_srt_name}.{ext}"
+# 链接 (STRM) 默认落在数据目录下按库名分子目录, 与源布局同构;
+# 占位符不含盘符, 由 `link_template_default()` 拼上绝对前缀.
+LINK_TEMPLATE_RELATIVE_DEFAULT = "{library}/[{prefix}/]{number}/{number}[-CD{cd?}][-{sub?}]"
+
+
+def link_template_default(link_root: Path) -> str:
+    """返回可用的绝对 `link_template` 默认值: `<link_root>/<库名>/<番号前缀>/<番号>/<文件名>`."""
+    return f"{link_root.resolve().as_posix()}/{LINK_TEMPLATE_RELATIVE_DEFAULT}"
 
 
 def normalize_link_template(value: str | None) -> str | None:
@@ -82,6 +99,7 @@ def resolve_paths(
         cd=cd,
         actor_genders=actor_genders,
     )
+    ctx.apply_library(library.name)
 
     # 先渲染视频, 注入 `{video_*}` 后再渲染链接与刮削产物.
     video = PathEngine(library.video_template).resolve(ctx, base_path, safe_dirs)
@@ -157,6 +175,7 @@ def resolve_subtitle_path(
     ctx = TemplateContext.from_metadata(
         metadata, source_path=source_path, file_info=file_info, actor_genders=actor_genders
     )
+    ctx.apply_library(library.name)
     if video_dest is not None:
         ctx.apply_video(video_dest, base_path)
     else:

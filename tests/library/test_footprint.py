@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 
 class TestFootprint:
-    async def _seed(self, repo: Repository, tmp_path: Path, *, video_dir_rel: str = "Studio/NSFS-039"):
+    async def _seed(self, repo: Repository, tmp_path: Path, *, video_dir_rel: str = "NSFS/NSFS-039"):
         from amane.db.models import MediaFileStatus
 
         root = tmp_path / "lib"

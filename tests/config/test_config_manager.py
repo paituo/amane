@@ -98,7 +98,7 @@ class TestBuildSafeDirs:
         a.mkdir()
         b.mkdir()
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": f"{a},{b}"}):
-            got = build_safe_dirs(ColdSettings(), [])
+            got = build_safe_dirs(ColdSettings(data_dir=tmp_path / "no-data"), [])
         assert got is not None
         assert set(got) == {a.resolve(), b.resolve()}
 
@@ -107,24 +107,32 @@ class TestBuildSafeDirs:
         existing.mkdir()
         missing = tmp_path / "gone"
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": f"{existing},{missing}"}):
-            got = build_safe_dirs(ColdSettings(), [])
+            got = build_safe_dirs(ColdSettings(data_dir=tmp_path / "no-data"), [])
         assert got == [existing.resolve()]
 
     def test_explicit_all_missing_is_empty_not_unrestricted(self, tmp_path: Path):
         missing = tmp_path / "gone"
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": str(missing)}):
-            assert build_safe_dirs(ColdSettings(), []) == []
+            assert build_safe_dirs(ColdSettings(data_dir=tmp_path / "no-data"), []) == []
 
     def test_unset_falls_back_to_library_paths(self, tmp_path: Path):
         lib = tmp_path / "lib"
         lib.mkdir()
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": ""}):
-            got = build_safe_dirs(ColdSettings(), [str(lib), str(tmp_path / "missing")])
+            got = build_safe_dirs(ColdSettings(data_dir=tmp_path / "no-data"), [str(lib), str(tmp_path / "missing")])
         assert got == [lib.resolve()]
 
-    def test_unset_no_libraries_is_empty(self):
+    def test_unset_no_libraries_is_empty(self, tmp_path: Path):
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": ""}):
-            assert build_safe_dirs(ColdSettings(), []) == []
+            assert build_safe_dirs(ColdSettings(data_dir=tmp_path / "no-data"), []) == []
+
+    def test_data_dir_always_trusted(self, tmp_path: Path):
+        """数据目录始终进安全根: 默认链接模板把 STRM 与配套产物落在 data 下."""
+        data = tmp_path / "data"
+        data.mkdir()
+        with patch.dict(os.environ, {"AMANE_SAFE_DIRS": str(tmp_path / "a")}):
+            got = build_safe_dirs(ColdSettings(data_dir=data), [])
+        assert got == [data.resolve()]
 
 
 # ---------------------------------------------------------------------------

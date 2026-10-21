@@ -38,6 +38,7 @@ TemplateVariables = TypedDict(
         "number": str,
         "prefix": str,
         "suffix": str,
+        "library": str,
         "title": str,
         "actor": str,
         "actors": str,
@@ -326,6 +327,7 @@ def _build_variables(
         "number": metadata.number,
         "prefix": prefix,
         "suffix": suffix,
+        "library": _UNKNOWN,
         "title": _safe(metadata.title) or metadata.number,
         "actor": _safe(actor) or _UNKNOWN,
         "actors": ",".join(metadata.actors) if metadata.actors else _UNKNOWN,
@@ -383,6 +385,10 @@ class TemplateContext:
         # {dir} 是 {raw_dir} 的别名, 不下发 schema.
         variables["dir"] = built["raw_dir"]
         return cls(variables=variables)
+
+    def apply_library(self, name: str | None) -> None:
+        """`{library}`: 库显示名, 供"落盘按库名分子目录"的模板使用."""
+        self.variables["library"] = _safe(name) or _UNKNOWN
 
     def apply_video(self, dest: Path, library_root: Path) -> None:
         self.dest = dest

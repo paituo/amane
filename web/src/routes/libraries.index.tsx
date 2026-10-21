@@ -7,6 +7,7 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   createLibraryMutation,
+  getPathTemplateSchemaOptions,
   listLibrariesOptions,
   listLibrariesQueryKey,
   updateLibraryMutation,
@@ -73,6 +74,8 @@ function LibrariesPage() {
   const { t } = useTranslation(["library", "common"]);
   const queryClient = useQueryClient();
   const { data, isLoading } = useQuery(listLibrariesOptions());
+  // 链接模板默认值依赖后端数据目录, 必须等 schema 到了再建空表单.
+  const { data: templateSchema } = useQuery(getPathTemplateSchemaOptions());
 
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm, setCreateForm] = useState<LibraryFormState>(emptyLibraryForm());
@@ -87,7 +90,7 @@ function LibrariesPage() {
     onSuccess: () => {
       notifications.show({ message: t("common:toast.watchPathAdded"), color: "blue" });
       setCreateOpen(false);
-      setCreateForm(emptyLibraryForm());
+      setCreateForm(emptyLibraryForm(templateSchema));
       invalidate();
     },
     onError: (err) =>
@@ -128,7 +131,13 @@ function LibrariesPage() {
     <Stack gap="md">
       <Group justify="space-between">
         <Title order={2}>{t("title")}</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateOpen(true)}>
+        <Button
+          leftSection={<IconPlus size={16} />}
+          onClick={() => {
+            setCreateForm(emptyLibraryForm(templateSchema));
+            setCreateOpen(true);
+          }}
+        >
           {t("common:actions.add")}
         </Button>
       </Group>

@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING, Self
 
 from pydantic import BaseModel, Field, model_validator
@@ -25,6 +26,7 @@ from ...organize.path_templates import (
     TRAILER_TEMPLATE_DEFAULT,
     VIDEO_TEMPLATE_DEFAULT,
     PathTemplate,
+    link_template_default,
 )
 from ...organize.strm_content import StrmContentTemplate
 from ...utils.model import create_partial_model, subset_of
@@ -146,14 +148,18 @@ class PathTemplateSchemaResponse(BaseModel):
     """与 resolve_paths 同源."""
 
     video_default: str
+    link_default: str
+    """可直接使用的绝对链接模板 (落在数据目录下, 按库名分子目录)."""
     optional_defaults: OptionalPathTemplateDefaults
     placeholders: list[PathTemplatePlaceholder]
     subtitle_extensions_default: list[str]
 
 
-def path_template_schema() -> PathTemplateSchemaResponse:
+def path_template_schema(link_root: Path | None = None) -> PathTemplateSchemaResponse:
+    """`link_root` 为数据目录; 省略时按默认 `./data` 推导, 仅用于无运行时上下文的场景."""
     return PathTemplateSchemaResponse(
         video_default=VIDEO_TEMPLATE_DEFAULT,
+        link_default=link_template_default(link_root or Path("./data")),
         optional_defaults=OPTIONAL_TEMPLATE_DEFAULTS,
         placeholders=[
             PathTemplatePlaceholder(name=name, map_keys=list(PLACEHOLDER_MAP_KEYS.get(name, ())))
