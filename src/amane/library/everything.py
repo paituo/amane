@@ -145,6 +145,9 @@ class EverythingClient:
             return self._parse_output(out, root, recursive=recursive)
 
     def _build_args(self, executable: Path, out: Path, root: Path, query: str, limit: int | None) -> list[str]:
+        # 注: 历史上此处带 `/a-d` (排除目录). 但当前官方 es.exe (ES 1.1.0.38) 在
+        # `-export-json` 组合下对 `/a-d` 返回 0 结果, 会让库枚举为空. 目录已被
+        # `extension_query` 的 ext: 过滤与 `_hit_from_row` 的尾斜杠检查双重排除, 故省略.
         args = [
             str(executable),
             "-export-json",
@@ -154,7 +157,6 @@ class EverythingClient:
             "-size",
             "-path",
             str(root),
-            "/a-d",
             "-timeout",
             str(self._timeout_ms),
         ]
@@ -199,7 +201,7 @@ def _hit_from_row(row: object) -> EverythingHit | None:
     filename = row.get("filename")
     if not isinstance(filename, str) or not filename.strip():
         return None
-    # 目录在 es 输出里以分隔符结尾; /a-d 已排除, 这里兜底防止配置漂移.
+    # 目录在 es 输出里以分隔符结尾; ext: 过滤通常已排除目录, 这里兜底防止配置漂移.
     if filename != filename.rstrip("\\/"):
         return None
     trimmed = filename.strip()
