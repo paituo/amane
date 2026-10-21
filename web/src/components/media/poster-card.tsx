@@ -16,10 +16,15 @@ interface PosterCardProps {
   item: MetadataResponse;
   /** 传入时按影片发行日标注演员当时年龄 (演员详情出演墙). */
   actorBirthday?: string | null;
+  /**
+   * 传入时点击就地打开详情弹窗; 修饰键与中键仍按链接处理 (新标签打开详情页面),
+   * 因此只在普通左键时接管事件.
+   */
+  onOpen?: () => void;
 }
 
 /** 加载失败退化为番号占位块. */
-export function PosterCard({ item, actorBirthday }: PosterCardProps) {
+export function PosterCard({ item, actorBirthday, onOpen }: PosterCardProps) {
   const { t } = useTranslation("metadata");
   const [errored, setErrored] = useState(false);
   const posterUrl = proxyImageUrl(item.poster_url ?? item.poster_urls?.[0]);
@@ -34,6 +39,14 @@ export function PosterCard({ item, actorBirthday }: PosterCardProps) {
       to="/meta/$metadataId"
       params={{ metadataId: String(item.id) }}
       style={{ textDecoration: "none", color: "inherit", display: "block" }}
+      onClick={(event) => {
+        if (onOpen == null) return;
+        // 保留浏览器行为: 中键与修饰键由链接自己打开详情页面.
+        if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        if (event.button !== 0) return;
+        event.preventDefault();
+        onOpen();
+      }}
     >
       <Card padding={0} radius="md" withBorder style={{ overflow: "hidden" }}>
         <Box pos="relative">

@@ -197,7 +197,9 @@
   "view": {
     "grid": "海报",
     "list": "列表",
-    "cloud": "词云"
+    "cloud": "词云",
+    "columnsPerRow": "每行数量",
+    "columnsHint": "每行显示的海报数量 ({{min}}–{{max}})"
   },
   "favorite": {
     "add": "收藏",

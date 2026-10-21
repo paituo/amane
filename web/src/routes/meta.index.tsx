@@ -22,6 +22,7 @@ import {
   type FilePhaseFilters,
   type HasFilesFilter,
 } from "@/components/media/facet-filter-controls";
+import { GridColumnsSlider } from "@/components/media/grid-columns-slider";
 import { MetaTable } from "@/components/media/meta-table";
 import { PosterGrid } from "@/components/media/poster-grid";
 import { activeFacetFilters, addFacetId, type FacetFilters, removeFacetId } from "@/lib/facets";
@@ -362,6 +363,7 @@ function MetaIndexPage() {
               }
             />
           )}
+          {!isList && <GridColumnsSlider />}
         </>
       }
       pageSize={
@@ -482,6 +484,11 @@ function MetaIndexPage() {
             items={gridItems}
             loading={gridQuery.isLoading && gridItems.length === 0}
             emptyMessage={t("empty")}
+            onFetchMore={
+              gridQuery.hasNextPage && !gridQuery.isFetchingNextPage
+                ? () => void gridQuery.fetchNextPage()
+                : undefined
+            }
           />
           {gridItems.length > 0 && (
             <InfiniteScrollSentinel

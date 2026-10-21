@@ -6,6 +6,7 @@ import {
   type MetadataSortPreference,
   metadataSortPreferenceSchema,
 } from "@/lib/media/browse";
+import { clampGridColumns, DEFAULT_GRID_COLUMNS } from "@/lib/media/grid-columns";
 import {
   actorListDefaultsSchema,
   feedsListDefaultsSchema,
@@ -60,6 +61,12 @@ interface UIState {
   autoScroll: boolean;
   logLevelFilter: LogLevel[];
   pageSizes: Record<PageSizeKey, PageSize>;
+  /**
+   * 海报墙 / 头像墙每行列数的用户偏好.
+   *
+   * 各处网格共用同一个值, 修改即时生效; 实际列数还要与断点上限取小, 见 `lib/media/grid-columns.ts`.
+   */
+  gridColumns: number;
   /** 片库 list 列宽覆盖; 缺省列采用组件内默认值. */
   metaColumnWidths: ColumnWidths<MetaTableColumnKey>;
   /** 演员 list 列宽覆盖. */
@@ -90,6 +97,7 @@ interface UIState {
   setAutoScroll: (autoScroll: boolean) => void;
   setLogLevelFilter: (levels: LogLevel[]) => void;
   setPageSize: (key: PageSizeKey, size: PageSize) => void;
+  setGridColumns: (columns: number) => void;
   setMetaColumnWidths: (widths: ColumnWidths<MetaTableColumnKey>) => void;
   setActorColumnWidths: (widths: ColumnWidths<ActorTableColumnKey>) => void;
   setPlaybackSourceOrder: (order: string[]) => void;
@@ -107,6 +115,7 @@ export const useUIStore = create<UIState>()(
       autoScroll: true,
       logLevelFilter: [],
       pageSizes: { ...DEFAULT_PAGE_SIZES },
+      gridColumns: DEFAULT_GRID_COLUMNS,
       metaColumnWidths: {},
       actorColumnWidths: {},
       playbackSourceOrder: [],
@@ -122,6 +131,7 @@ export const useUIStore = create<UIState>()(
         set((s) => ({
           pageSizes: { ...s.pageSizes, [key]: size },
         })),
+      setGridColumns: (columns) => set({ gridColumns: clampGridColumns(columns) }),
       setMetaColumnWidths: (widths) => set({ metaColumnWidths: widths }),
       setActorColumnWidths: (widths) => set({ actorColumnWidths: widths }),
       setPlaybackSourceOrder: (order) => set({ playbackSourceOrder: order }),
@@ -147,6 +157,9 @@ export const useUIStore = create<UIState>()(
           ...current,
           ...p,
           pageSizes,
+          gridColumns: clampGridColumns(
+            typeof p?.gridColumns === "number" ? p.gridColumns : DEFAULT_GRID_COLUMNS,
+          ),
           metaColumnWidths: p?.metaColumnWidths ?? {},
           actorColumnWidths: p?.actorColumnWidths ?? {},
           playbackSourceOrder: p?.playbackSourceOrder ?? [],

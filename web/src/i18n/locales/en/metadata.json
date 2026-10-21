@@ -201,7 +201,9 @@
   "view": {
     "grid": "Grid",
     "list": "List",
-    "cloud": "Cloud"
+    "cloud": "Cloud",
+    "columnsPerRow": "Per row",
+    "columnsHint": "Posters per row ({{min}}–{{max}})"
   },
   "favorite": {
     "add": "Favorite",

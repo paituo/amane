@@ -20,6 +20,7 @@ import { SortMenu } from "@/components/common/sort-menu";
 import { ActorFilterControls } from "@/components/media/actor-filter-controls";
 import { ActorGrid } from "@/components/media/actor-grid";
 import { ActorTable } from "@/components/media/actor-table";
+import { GridColumnsSlider } from "@/components/media/grid-columns-slider";
 import {
   ACTOR_RANGE_FILTERS,
   type ActorFilterKey,
@@ -272,6 +273,7 @@ function ActorsIndexPage() {
               }
             />
           )}
+          {!isList && <GridColumnsSlider />}
         </>
       }
       pageSize={

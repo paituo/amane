@@ -54,6 +54,7 @@ import { ActorUserTags } from "@/components/media/actor-user-tags";
 import { ClearPersonNotice } from "@/components/media/clear-person-notice";
 import { FanartLightbox } from "@/components/media/fanart-lightbox";
 import { LockChip, LockToggle, type LockProps } from "@/components/media/field-lock";
+import { GridColumnsSlider } from "@/components/media/grid-columns-slider";
 import { PosterGrid } from "@/components/media/poster-grid";
 import { ACTOR_FIELD_LABEL_KEY, LOCKABLE_ACTOR_FIELDS } from "@/lib/actors/fields";
 import { extractErrorMessage } from "@/lib/api-error";
@@ -399,6 +400,7 @@ function ActorDetailPage() {
           defaultOrder={DEFAULT_METADATA_SORT_PREFERENCE.order}
           onChange={(sortBy, order) => setActorWorksSort({ sort_by: sortBy, order })}
         />
+        <GridColumnsSlider />
       </Group>
 
       <PosterGrid
@@ -406,6 +408,7 @@ function ActorDetailPage() {
         loading={isLoading && items.length === 0}
         emptyMessage={t("empty")}
         actorBirthday={actor?.birthday}
+        onFetchMore={hasNextPage && !isFetchingNextPage ? () => void fetchNextPage() : undefined}
       />
 
       {items.length > 0 && (

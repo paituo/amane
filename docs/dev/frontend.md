@@ -10,7 +10,7 @@
 |----|------|---------|-------------|
 | **Browse** | `/` | `routes/index.tsx` | `components/agent/` (`agent-home.tsx` 为对话主体), `lib/agent/` |
 | **Browse** | `/meta` | `routes/meta.tsx` + `meta.index.tsx` | `components/media/` (`poster-grid` / `meta-table` / `facet-filter-controls`), `lib/media/browse.ts` |
-| **Browse** | `/meta/$metadataId` | `routes/meta.$metadataId.tsx` | `components/media/playback-panel.tsx` → `playback-player.tsx`, `comment-section.tsx` → `comment-body.tsx`, `lib/media/comment-segments.ts`, `lib/media/metadata-fields.ts`, `components/media/field-lock.tsx` |
+| **Browse** | `/meta/$metadataId` | `routes/meta.$metadataId.tsx` | `components/media/metadata-detail.tsx` (详情主体, 与就地弹窗同源) → `components/media/playback-panel.tsx` → `playback-player.tsx`, `comment-section.tsx` → `comment-body.tsx`, `lib/media/comment-segments.ts`, `lib/media/metadata-fields.ts`, `components/media/field-lock.tsx` |
 | **Browse** | `/actors` | `routes/actors.tsx` + `actors.index.tsx` | `components/media/actor-grid.tsx` / `actor-table.tsx`, `lib/actors/browse.ts` |
 | **Browse** | `/actors/$actorId` | `routes/actors.$actorId.tsx` | `components/media/actor-card.tsx` / `actor-edit-dialog.tsx` / `field-lock.tsx`, `lib/actors/fields.ts`, `hooks/use-facet-identity-actions.ts` |
 | **Browse** | `/catalog/...` | `routes/catalog.tsx` + `catalog.index.tsx` + `catalog.$kind.tsx` + `catalog.$kind_.$facetId.tsx` | `components/media/catalog-facet-table.tsx`, `facet-rules-panel.tsx` |
@@ -31,6 +31,8 @@
 
 片库 / 演员 / 分类无独立「管理」路由, list 视图才有多选与破坏性操作; 多选批量一律走批量端点 (一次请求一次落库, 不逐条发请求), 单行按钮复用同一入口. Feed 相反, 阅读器与源表不共用布局. 查询预设是管理页例外: `/saved-queries` 只列已保留的预设, 全选与批量操作作用于过滤后的可见集合; 会话页的预设面板反过来只列当前会话的临时预设. 侧栏「全部 / 未分组」不经深链进入. `/feeds` 的选中态必须 `activeOptions.exact` 且忽略 search, 否则打开 `/feeds/sources` 时「订阅」也会亮.
 
+**客户端偏好**: ui store (`stores/ui.ts`) 经 zustand persist 写入浏览器 `localStorage` 的 `amane-web`, 没有后端副本, 也没有保存按钮. 字段变化立即写入, 页面加载时读取并经 `merge` 校验 (越界与类型不符的值退回默认). 存储按 origin 隔离: 更换端口、在 `localhost` 与 `127.0.0.1` 之间切换、清除站点数据之后, 偏好均从默认值重新开始. 需要显式确认的只有侧栏列表默认 (见下段).
+
 **列表默认**: 侧栏「片库 / 演员 / 订阅」按钮携带 `lib/nav-defaults.ts` 白名单内的默认列表参数 (排序、筛选、视图; 存于 ui store), 点击时经路由跳转整体替换 search, 因此 URL 仍是列表态的唯一事实来源 —— 页面内清除的筛选不会被默认重新写入. Mantine 的多态 props 把 `component={Link}` 的 `search` 收窄成 `never`, 参数只能这样送入; 中键与修饰键保留浏览器行为, 打开的地址因此不带默认参数.
 
 **入口分流**: 非演员实体进 `/catalog/$kind/$facetId`, 演员进 `/actors/$actorId` (演员不进入 `/catalog`); `FacetBadge` 默认深链分类, 筛选深链 `/meta`.
@@ -48,6 +50,12 @@
 窄屏 (md 以下) 的 `BrowsePageShell` 只剩一行: 标题 + 视图切换 + 筛选入口, 摘要 / 搜索 / 高级筛选面板 / 附属控件 / 右侧动作全进底部面板; 带高级筛选的列表页必须把面板经 `filterPanel` 槽传入, 不允许把 `<Collapse>` 放进 children — 否则开关与面板会分处两地. 同一批控件只渲染一处: 两个断点各一份会让搜索框在 DOM 里存在两个. `SelectionBar` 无选中时在窄屏整条不渲染; 订阅浏览页的 `FeedReader` 用同一形态.
 
 图标按钮的悬浮说明必须经 `HintedActionIcon` (Mantine Tooltip), 不允许 HTML `title`; disabled 控件须再包一层可接收指针事件的元素.
+
+## 网格与就地详情
+
+**列数**: 海报墙与头像墙的列数取 `lib/media/grid-columns.ts` 的断点表与 ui store 的 `gridColumns` 中的较小者 — 用户偏好是 3–7 的上限, 窄屏仍收在断点以内. 入口是 `GridColumnsSlider`, 各处网格共用同一份偏好, 断点表只有上面那一个副本. 滑块每次档位变化即写入持久化存储 (档位共 5 个, 写入次数有界), 不采用列宽拖到松手才保存的做法.
+
+**就地查看**: 点击海报不导航, 由 `PosterGrid` 内的 `MetadataViewer` 原地打开居中弹窗; 两侧箭头与左右方向键翻阅宿主已加载的那段序列, 抵达两端即停住 (不环绕), 接近末尾时经 `onFetchMore` 追加下一页. 详情主体两处同源 (`components/media/metadata-detail.tsx`), 详情路由只负责写地址栏的评论跳转秒数, 因此 `embedded` / `onDeleted` / `onSeekCommit` 三个 props 决定了差别 — 不得为弹窗另写一份渲染.
 
 ## 窄屏
 

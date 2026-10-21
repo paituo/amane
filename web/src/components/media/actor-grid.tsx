@@ -1,8 +1,9 @@
-import { AspectRatio, Center, SimpleGrid, Skeleton, Stack, Text, useMatches } from "@mantine/core";
+import { AspectRatio, Center, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
 import { useLocation } from "@tanstack/react-router";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Virtuoso, type StateSnapshot, type VirtuosoHandle } from "react-virtuoso";
 import type { ActorResponse } from "@/client/types.gen";
+import { useGridColumns } from "@/lib/media/grid-columns";
 import { ActorCard } from "./actor-card";
 
 /**
@@ -23,14 +24,13 @@ function rememberGridState(key: string, state: StateSnapshot): void {
   }
 }
 
-// sm/md 收窄一列: 48em 起导航栏展开, 内容区反而变窄, 沿用桌面列数会让缩略图小一档.
-const GRID_COLS = { base: 2, xs: 3, sm: 3, md: 4, lg: 6, xl: 7 } as const;
-
 interface ActorGridProps {
   items: ActorResponse[];
   loading?: boolean;
   emptyMessage?: string;
 }
+
+/** 列数取自 `useGridColumns`: 断点基准在 lib/media/grid-columns.ts, 与海报墙同源. */
 
 /**
  * 卡片按列数切行: 行是虚拟化的单元, 行高由该行最高的卡片决定.
@@ -74,7 +74,7 @@ function ActorGridRow({ items, cols }: { items: ActorResponse[]; cols: number })
  * 列数与演员墙同源, 不要另写一份断点.
  */
 export function ActorCardGrid({ items }: { items: ActorResponse[] }) {
-  const cols = useMatches(GRID_COLS);
+  const cols = useGridColumns();
   return (
     <SimpleGrid cols={cols} spacing="md">
       {items.map((item) => (
@@ -94,7 +94,7 @@ export function ActorCardGrid({ items }: { items: ActorResponse[] }) {
  * 下一次挂载), 而父组件的清理函数先于子树的 ref 解绑执行, 句柄此时仍可用.
  */
 function ActorPosterWall({ items, restoreKey }: { items: ActorResponse[]; restoreKey: string }) {
-  const cols = useMatches(GRID_COLS);
+  const cols = useGridColumns();
   const rows = useMemo(() => toRows(items, cols), [items, cols]);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const [restoreState] = useState(() => GRID_STATE_CACHE.get(restoreKey));
@@ -131,9 +131,10 @@ export const ActorGrid = memo(function ActorGrid({
   // 历史条目 key 与路由器自身的滚动缓存同源: 新进入的条目没有快照, 不会继承上一次的浏览位置.
   const restoreKey = useLocation({ select: (l) => l.state.key ?? l.href });
 
+  const cols = useGridColumns();
   if (loading) {
     return (
-      <SimpleGrid cols={GRID_COLS} spacing="md">
+      <SimpleGrid cols={cols} spacing="md">
         {Array.from({ length: 12 }, (_, i) => (
           <Stack key={i} gap={2}>
             <AspectRatio ratio={0.75}>

@@ -24,6 +24,7 @@ import type { FacetKind } from "@/client/types.gen";
 import { InfiniteScrollSentinel } from "@/components/common/infinite-scroll-sentinel";
 import { ActorCardGrid } from "@/components/media/actor-grid";
 import { FacetFavoriteStar } from "@/components/media/facet-favorite-star";
+import { GridColumnsSlider } from "@/components/media/grid-columns-slider";
 import { PosterGrid } from "@/components/media/poster-grid";
 import { isOneOf } from "@/lib/exhaustive";
 import { CATALOG_FACET_KINDS, FAVORITE_FACET_KINDS } from "@/lib/exhaustive-maps";
@@ -112,6 +113,8 @@ function FacetDetailPage() {
               {t("browse.count", { count: facet.count })}
             </Badge>
           )}
+          {/* 同时调这页的两片 grid (作品海报与演员头像), 故只放一个控件. */}
+          <GridColumnsSlider />
         </Group>
         <Link to="/meta" search={metaSearchForFacet(kind, id)} style={{ textDecoration: "none" }}>
           <Button variant="light" size="sm" leftSection={<IconFilter size={14} />} component="span">
@@ -132,6 +135,9 @@ function FacetDetailPage() {
             items={items}
             loading={isLoading && items.length === 0}
             emptyMessage={t("empty")}
+            onFetchMore={
+              hasNextPage && !isFetchingNextPage ? () => void fetchNextPage() : undefined
+            }
           />
           {items.length > 0 && (
             <InfiniteScrollSentinel
