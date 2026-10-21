@@ -12,6 +12,7 @@ from .actors import (
     CropAvatarRequest,
 )
 from .comments import CommentCreateRequest, CommentResponse, CommentUpdateRequest
+from .config import ConfigProbeRequest
 from .crop import CropBoxRequest
 from .facets import (
     FacetBatchAction,
@@ -128,6 +129,7 @@ __all__ = [
     "CommentCreateRequest",
     "CommentResponse",
     "CommentUpdateRequest",
+    "ConfigProbeRequest",
     "ConnectivityCheckRequest",
     "ConnectivityItemResponse",
     "ConnectivityReportResponse",

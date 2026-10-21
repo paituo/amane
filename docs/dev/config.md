@@ -45,6 +45,30 @@ Worker 替换不取消运行中任务: `_rebuild()` 构建新 worker 后旧 work
 
 **浏览器池**: 只在 `network.browser` / `network.proxy` 变化时重建 (见 `src/amane/app/runtime.py::AppRuntime._rebuild`), 其余热重载复用同一实例以保留已解决的挑战会话; 被替换的旧池由 `_release_browser()` 在引用它的退役 worker 排空后关闭.
 
+**检索栈**: 只在 `hot.search` 变化时重建 (`AppRuntime._replace_search_if_needed`). 其中 `embedding` 子配置 (provider / model / dim / batch_size / timeout_s / threads) 逐字段相同、且向量路仍然启用时, 旧 provider 连同一个还在跑的预热任务整体移交给新栈, 不重新加载模型 —— 否则改一个 `fusion.zgate` 也要付一次模型加载. 移交后旧栈 `aclose()` 不再关闭该 provider, 所有权随 `ReusedEmbedding` 转移; 向量路被关掉时不接管, 由旧栈连同模型一起释放. 契约见 [search.md](search.md).
+
+## 配置自检 (`POST /api/config/probe`)
+
+设置页可测分区标题右侧的「测试」按钮对应这个端点. 设计约束:
+
+- **不进任务队列**: 结果要立刻回到点按钮的人手里, 也不该占用 worker 名额 (与 `/api/network/check` 同一取向).
+- **必须能测未保存的值**: 请求体 `{section, values}` 的 `values` 经 `ConfigManager.preview()` 合并成一份临时 `HotSettings`, 只校验不落盘、不触发 rebuild. 因此"改完先测、测通再存"可行; 连 Pydantic 都过不了的配置仍以 422 拒绝, 不浪费一次真实请求.
+- **流式**: 响应为 NDJSON (`application/x-ndjson`), 一行一条 `{seq, level, message, detail, elapsed_ms, step_ms}`, 末行 `{done: true, ok, elapsed_ms}`. 单步失败只体现在事件里, 流始终以 `done` 收尾 —— 用 5xx 表达"代理不通"会让前端丢掉已经产生的那几步.
+- **只读**: 不写库、不建表 (索引规模经 `mode=ro` 连接读取)、不改配置; 自建的 provider 结束时 `aclose()`, 复用运行中的实例则不关.
+
+注册表在 `src/amane/probe/registry.py`, 现有四个分区:
+
+| section | 检查内容 |
+| --- | --- |
+| `llm` | 凭据 / 模型是否齐备 → 经 `build_model` + `model_request` 发一次最小请求 (与翻译同一条构造路径, 才能暴露"协议与端点不匹配") |
+| `agent` | 同上, 但用 `agent` 自己的凭据与 `api_type` |
+| `search` | 开关组合 → `sqlite-vec` 能否加载 → 索引规模 → 真的算一条向量并比对 `dim` → 索引里的 model/dim 是否与当前配置一致 |
+| `network` | 代理语法 → 直连与经代理各请求一次 `cloudflare/cdn-cgi/trace` → 比对出口 IP (相同即判"代理未生效") |
+
+新增分区只需在注册表登记一个 `async def(ctx) -> AsyncIterator[ProbeEvent]`; 前端 `PROBE_SECTIONS` 另有一份 section 名单 (按钮按 section 名渲染), 两处需同步.
+
+代理探针的 httpx 客户端显式 `trust_env=False`: 否则 `HTTP(S)_PROXY` 环境变量会让"直连"名不副实, 出口 IP 对比随之失去意义.
+
 ## TOML 持久化
 
 写 TOML 必须用临时文件 + `os.replace` 原子化 — 直接覆盖时写入中途进程中止会留下空文件. `tomli_w` 不接受 `None` / `set`, 持久化前须按 JSON 模式导出并剔除 `None` 与默认值.

@@ -112,6 +112,46 @@
         }
       }
     },
+    "/api/config/probe": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Probe Config",
+        "description": "对一个配置分区做自检, 边跑边把步骤推给前端.\n\n``values`` 存在时按\"未保存的表单值\"测: ``preview`` 只做校验与合并, 不落盘也不触发 rebuild,\n所以点一次测试不会顺手改掉线上配置. 校验失败照常 422 —— 连 Pydantic 都过不了的配置没必要发请求.\n\n单步失败只体现在事件里, 流始终以 ``done`` 收尾: 一次测试的产出就是这份日志, 用 5xx 表达\n\"代理不通\"会让前端拿不到已经产生的那几步 (与 ``/api/network/check`` 同一取向).",
+        "operationId": "probe_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/libraries/{library_id}/cleanup/inventory": {
       "get": {
         "tags": [
@@ -7717,6 +7757,34 @@
           "body"
         ],
         "title": "CommentUpdateRequest"
+      },
+      "ConfigProbeRequest": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "title": "Section",
+            "description": "HotSettings 的 section 名: llm / agent / search / network"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values",
+            "description": "该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section"
+        ],
+        "title": "ConfigProbeRequest",
+        "description": "配置自检请求.\n\n``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),\n这样改完还没保存也能先验证; 不传则按已保存的配置测."
       },
       "ConnectivityCheckRequest": {
         "properties": {

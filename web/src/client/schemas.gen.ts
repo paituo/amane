@@ -1422,6 +1422,35 @@ export const CommentUpdateRequestSchema = {
     title: 'CommentUpdateRequest'
 } as const;
 
+export const ConfigProbeRequestSchema = {
+    properties: {
+        section: {
+            type: 'string',
+            title: 'Section',
+            description: 'HotSettings 的 section 名: llm / agent / search / network'
+        },
+        values: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Values',
+            description: '该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试'
+        }
+    },
+    type: 'object',
+    required: [
+        'section'
+    ],
+    title: 'ConfigProbeRequest',
+    description: '配置自检请求.\n\n``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),\n这样改完还没保存也能先验证; 不传则按已保存的配置测.'
+} as const;
+
 export const ConnectivityCheckRequestSchema = {
     properties: {
         source_ids: {

@@ -812,6 +812,31 @@ export type CommentUpdateRequest = {
 };
 
 /**
+ * ConfigProbeRequest
+ *
+ * 配置自检请求.
+ *
+ * ``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),
+ * 这样改完还没保存也能先验证; 不传则按已保存的配置测.
+ */
+export type ConfigProbeRequest = {
+    /**
+     * Section
+     *
+     * HotSettings 的 section 名: llm / agent / search / network
+     */
+    section: string;
+    /**
+     * Values
+     *
+     * 该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试
+     */
+    values?: {
+        [key: string]: unknown;
+    } | null;
+};
+
+/**
  * ConnectivityCheckRequest
  *
  * 缺省或空 ``source_ids`` = 探测当前配置真正会请求的全部来源.
@@ -5322,6 +5347,29 @@ export type GetConfigSchemaResponses = {
 };
 
 export type GetConfigSchemaResponse = GetConfigSchemaResponses[keyof GetConfigSchemaResponses];
+
+export type ProbeConfigData = {
+    body: ConfigProbeRequest;
+    path?: never;
+    query?: never;
+    url: '/api/config/probe';
+};
+
+export type ProbeConfigErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ProbeConfigError = ProbeConfigErrors[keyof ProbeConfigErrors];
+
+export type ProbeConfigResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type GetCleanupInventoryData = {
     body?: never;
