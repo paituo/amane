@@ -1651,6 +1651,64 @@ class TestTaskRepo:
         assert retried[0].id != failed.id
         assert await repo.count_tasks(task_types=[TaskType.ORGANIZE]) == 3
 
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retry_strips_metadata_cache_from_scrape(self, repo: Repository):
+        """重试刮削任务必须去掉 use_cache 里的 metadata, 否则会命中 DB 旧快照而跳过网络抓取."""
+        failed = await repo.create_task(
+            task_type=TaskType.SCRAPE, payload={"number": "X-1", "use_cache": ["metadata", "trans"]}
+        )
+        assert failed.id is not None
+        await repo.fail_task(failed.id, "boom")
+
+        retried = await repo.retry_tasks([failed])
+        assert len(retried) == 1
+        clone = retried[0]
+        assert clone.status == TaskStatus.QUEUED
+        assert clone.id != failed.id
+        # 关键: metadata 缓存被剥离, trans 译文缓存保留 → 强制全站重爬.
+        assert clone.payload.get("use_cache") == ["trans"]
+        assert clone.payload.get("number") == "X-1"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retry_strips_metadata_cache_from_actor_scrape(self, repo: Repository):
+        failed = await repo.create_task(
+            task_type=TaskType.ACTOR_SCRAPE, payload={"actor_id": 9, "use_cache": ["metadata", "trans"]}
+        )
+        assert failed.id is not None
+        await repo.fail_task(failed.id, "boom")
+
+        retried = await repo.retry_tasks([failed])
+        assert len(retried) == 1
+        assert retried[0].payload.get("use_cache") == ["trans"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retry_preserves_payload_without_metadata_cache(self, repo: Repository):
+        """原本就没有 metadata 缓存 (或压根没有 use_cache) 的 payload, 重试后保持原样."""
+        with_meta_only = await repo.create_task(
+            task_type=TaskType.SCRAPE, payload={"number": "Y-1", "use_cache": ["trans"]}
+        )
+        no_cache = await repo.create_task(task_type=TaskType.SCRAPE, payload={"number": "Y-2"})
+        await repo.fail_task(with_meta_only.id, "boom")
+        await repo.fail_task(no_cache.id, "boom")
+
+        clones = await repo.retry_tasks([with_meta_only, no_cache])
+        by_number = {c.payload.get("number"): c for c in clones}
+        assert by_number["Y-1"].payload.get("use_cache") == ["trans"]
+        assert by_number["Y-2"].payload == {"number": "Y-2"}
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_retry_does_not_touch_non_scrape_payload(self, repo: Repository):
+        failed = await repo.create_task(
+            task_type=TaskType.ORGANIZE, payload={"library_id": 3, "use_cache": ["metadata"]}
+        )
+        assert failed.id is not None
+        await repo.fail_task(failed.id, "boom")
+
+        retried = await repo.retry_tasks([failed])
+        assert len(retried) == 1
+        # 非刮削类任务的 payload 原样克隆, 不剥离 cache 键.
+        assert retried[0].payload == {"library_id": 3, "use_cache": ["metadata"]}
+
 
 class TestListSorting:
     """跨资源的服务端排序: 字段 + 升降序 + 分页稳定性 (并列值用 id 作次级键)."""

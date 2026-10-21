@@ -130,6 +130,29 @@ async def _ids_with_external_descendants(session: AsyncSession, ids: Sequence[in
     return protected
 
 
+# 重试刮削类任务时强制全站重爬: 去掉 use_cache 里的 metadata 缓存种类.
+# 否则克隆会原样继承 metadata 缓存, ScrapeHandler 直接命中 DB 里的 raw 快照而跳过网络请求,
+# 表现为任务列表点"重试"看似成功却并未真正重新抓取.
+_METADATA_CACHE_KIND = "metadata"
+_SCRAPE_RETRY_TYPES = frozenset({TaskType.SCRAPE, TaskType.ACTOR_SCRAPE})
+
+
+def _retry_payload(task: Task) -> dict[str, object]:
+    """为重试构造 payload: 刮削类任务去掉 metadata 缓存, 其余原样克隆."""
+    if task.type not in _SCRAPE_RETRY_TYPES:
+        return dict(task.payload or {})
+    raw = task.payload or {}
+    use_cache = raw.get("use_cache")
+    if not isinstance(use_cache, (list, set, tuple)):
+        return dict(raw)
+    stripped = [k for k in use_cache if k != _METADATA_CACHE_KIND]
+    if len(stripped) == len(use_cache):
+        return dict(raw)
+    clone = dict(raw)
+    clone["use_cache"] = stripped
+    return clone
+
+
 class TasksRepoMixin(RepositoryMixinBase):
     async def create_task(self, task_type: TaskType, payload: dict[str, object] | BaseModel, priority: int = 0) -> Task:
         tasks = await self.create_tasks(task_type, [payload], priority=priority)
@@ -438,7 +461,7 @@ class TasksRepoMixin(RepositoryMixinBase):
             created: list[Task] = []
             seen: set[int] = set()
             for task in tasks:
-                row = await _insert_or_reuse(session, task.type, task.payload or {}, task.priority)
+                row = await _insert_or_reuse(session, task.type, _retry_payload(task), task.priority)
                 assert row.id is not None
                 if row.id in seen:
                     continue
