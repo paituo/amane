@@ -1688,6 +1688,8 @@ class TestTaskRepo:
             task_type=TaskType.SCRAPE, payload={"number": "Y-1", "use_cache": ["trans"]}
         )
         no_cache = await repo.create_task(task_type=TaskType.SCRAPE, payload={"number": "Y-2"})
+        assert with_meta_only.id is not None
+        assert no_cache.id is not None
         await repo.fail_task(with_meta_only.id, "boom")
         await repo.fail_task(no_cache.id, "boom")
 

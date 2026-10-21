@@ -812,6 +812,31 @@ export type CommentUpdateRequest = {
 };
 
 /**
+ * ConfigProbeRequest
+ *
+ * 配置自检请求.
+ *
+ * ``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),
+ * 这样改完还没保存也能先验证; 不传则按已保存的配置测.
+ */
+export type ConfigProbeRequest = {
+    /**
+     * Section
+     *
+     * HotSettings 的 section 名: llm / agent / search / network
+     */
+    section: string;
+    /**
+     * Values
+     *
+     * 该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试
+     */
+    values?: {
+        [key: string]: unknown;
+    } | null;
+};
+
+/**
  * ConnectivityCheckRequest
  *
  * 缺省或空 ``source_ids`` = 探测当前配置真正会请求的全部来源.
@@ -1070,6 +1095,50 @@ export type DesktopResponse = {
  * 影片附属资源类型: 刮削写入 Resource, 整理时按库配置复制到库路径.
  */
 export type DownloadableResource = 'thumb' | 'poster' | 'extrafanart' | 'trailer';
+
+/**
+ * EmbeddingConfig
+ *
+ * 嵌入端点配置. 与 llm / agent section 隔离, 凭据不共用.
+ */
+export type EmbeddingConfig = {
+    provider?: EmbeddingProviderName;
+    /**
+     * Model
+     */
+    model?: string;
+    /**
+     * Dim
+     */
+    dim?: number;
+    /**
+     * Base Url
+     */
+    base_url?: string;
+    /**
+     * Api Key
+     */
+    api_key?: string | null;
+    /**
+     * Batch Size
+     */
+    batch_size?: number;
+    /**
+     * Timeout S
+     */
+    timeout_s?: number;
+    /**
+     * Threads
+     */
+    threads?: number | null;
+};
+
+/**
+ * EmbeddingProviderName
+ *
+ * 嵌入实现. 两者对上层同协议, 换实现不改变索引存储格式.
+ */
+export type EmbeddingProviderName = 'fastembed' | 'openai_compatible';
 
 /**
  * ErrorRow
@@ -1681,6 +1750,26 @@ export type FilePhaseSummary = {
 export type FootprintNoticeKind = 'missing' | 'outside_root' | 'work_dir_is_root' | 'work_dir_multiple' | 'template_error';
 
 /**
+ * FusionConfig
+ *
+ * 关键词与向量的融合参数.
+ */
+export type FusionConfig = {
+    /**
+     * Zgate
+     */
+    zgate?: number;
+    /**
+     * Word Weight
+     */
+    word_weight?: number;
+    /**
+     * Vector K
+     */
+    vector_k?: number;
+};
+
+/**
  * HTTPValidationError
  */
 export type HttpValidationError = {
@@ -1717,6 +1806,7 @@ export type HotSettings = {
     sr?: SrConfig;
     watermark?: WatermarkConfig;
     llm?: LlmConfig;
+    search?: SearchConfig;
     r18?: R18Config;
     watcher?: WatcherConfig;
     everything?: EverythingConfig;
@@ -2638,6 +2728,11 @@ export type MetadataListResponse = {
      * Total
      */
     total: number;
+    search_mode?: SearchMode;
+    /**
+     * Search Degraded
+     */
+    search_degraded?: boolean;
 };
 
 /**
@@ -4106,6 +4201,39 @@ export type ScrapingConfig = {
 };
 
 /**
+ * SearchConfig
+ *
+ * 检索开关与参数. 三个开关正交, 全关等价于旧行为.
+ */
+export type SearchConfig = {
+    /**
+     * Keyword Enabled
+     */
+    keyword_enabled?: boolean;
+    /**
+     * Vector Enabled
+     */
+    vector_enabled?: boolean;
+    /**
+     * Hybrid Enabled
+     */
+    hybrid_enabled?: boolean;
+    vector_engine?: VectorEngine;
+    embedding?: EmbeddingConfig;
+    fusion?: FusionConfig;
+};
+
+/**
+ * SearchMode
+ *
+ * 本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.
+ *
+ * 定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方
+ * (路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed).
+ */
+export type SearchMode = 'like' | 'keyword' | 'vector' | 'hybrid';
+
+/**
  * SelectionNoticeResponse
  *
  * 展开时未能纳入清单的项. 面板按 ``kind`` 用界面语言给出文案, 因此服务端不带文案.
@@ -5062,6 +5190,13 @@ export type ValidationError = {
 };
 
 /**
+ * VectorEngine
+ *
+ * 向量索引后端.
+ */
+export type VectorEngine = 'sqlite_vec' | 'python';
+
+/**
  * WatcherConfig
  */
 export type WatcherConfig = {
@@ -5212,6 +5347,29 @@ export type GetConfigSchemaResponses = {
 };
 
 export type GetConfigSchemaResponse = GetConfigSchemaResponses[keyof GetConfigSchemaResponses];
+
+export type ProbeConfigData = {
+    body: ConfigProbeRequest;
+    path?: never;
+    query?: never;
+    url: '/api/config/probe';
+};
+
+export type ProbeConfigErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type ProbeConfigError = ProbeConfigErrors[keyof ProbeConfigErrors];
+
+export type ProbeConfigResponses = {
+    /**
+     * Successful Response
+     */
+    200: unknown;
+};
 
 export type GetCleanupInventoryData = {
     body?: never;

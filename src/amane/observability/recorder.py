@@ -453,7 +453,13 @@ def _guess_ext(content_type: str | None, body: bytes) -> str:
 
 
 def _worse_outcome(a: SiteOutcomeKind, b: SiteOutcomeKind) -> SiteOutcomeKind:
-    order = {SiteOutcomeKind.CACHE_HIT: 0, SiteOutcomeKind.OK: 1, SiteOutcomeKind.FAILED: 2}
+    # CACHE_HIT / SKIPPED 都是中性结论 (非成功非空失败), 被 OK / FAILED 覆盖.
+    order = {
+        SiteOutcomeKind.CACHE_HIT: 0,
+        SiteOutcomeKind.SKIPPED: 0,
+        SiteOutcomeKind.OK: 1,
+        SiteOutcomeKind.FAILED: 2,
+    }
     return a if order[a] >= order[b] else b
 
 

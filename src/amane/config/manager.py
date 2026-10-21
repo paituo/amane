@@ -573,6 +573,26 @@ class NetworkConfig(BaseModel):
     default_rate_limit: float = Field(default=5, ge=0.1, le=100)
     """优先级低于 network.rate_limits 与站点配置."""
 
+    response_cache_ttl_s: float = Field(default=300.0, ge=0.0, le=86_400.0, json_schema_extra={"x-hidden": True})
+    """跨任务 HTTP 响应缓存 TTL (秒); ``0`` 关闭. 只缓存小的文本类 GET 2xx 响应 (搜索/详情页), 跨番号复用.
+    短 TTL 约束站点 schema 变更的可见延迟; 强制刷新可经 ``WebClient.request(bypass_cache=True)`` 绕过."""
+
+    response_cache_max_entries: int = Field(default=256, ge=0, le=5000, json_schema_extra={"x-hidden": True})
+    """响应缓存 LRU 条目上限; ``0`` 关闭."""
+
+    adaptive_rate_limit: bool = Field(default=True, json_schema_extra={"x-hidden": True})
+    """P2-⑥ 自适应限速总开关; ``False`` 时恢复固定配置速率 (改造前的严格平滑桶)."""
+
+    adaptive_rate_floor_ratio: float = Field(default=0.25, ge=0.05, le=1.0, json_schema_extra={"x-hidden": True})
+    """自适应减速下限 = 该 host 配置速率 × 此比值. 自适应只在该下限与配置速率之间浮动:
+    永远不会超过配置速率 (配置即礼貌上限), 也永远不会慢于此下限."""
+
+    proxies: list[str] = Field(default_factory=list, json_schema_extra={"x-hidden": True})
+    """P2-⑦ 多代理池 (有序, 非空即启用). 启用后, 未配置站点级代理的 host 从池内按健康态
+    轮选 (被熔断开路的不选, 冷却后自动回池); 站点级代理覆盖仍优先于池.
+    池是唯一代理来源: 全部开路时请求快速失败 (``CIRCUIT_OPEN``), 不静默回退 ``network.proxy``.
+    连接级失败自动换池内下一个健康代理 (不占重试预算). 空列表 = 不启用, 行为与改造前一致."""
+
 
 class WorkerConfig(BaseModel):
     concurrency: int = Field(default=10, ge=1, le=64)
@@ -679,6 +699,83 @@ class LLMConfig(BaseModel):
     def _blank_field_prompts_are_unset(cls, value: dict[MetadataField, str]) -> dict[MetadataField, str]:
         """空白条目与缺席等价, 与可增减 key 的 dict 编码语义一致."""
         return {field: text.strip() for field, text in value.items() if text.strip()}
+
+
+class EmbeddingProviderName(StrEnum):
+    """嵌入实现. 两者对上层同协议, 换实现不改变索引存储格式."""
+
+    FAST_EMBED = "fastembed"
+    """进程内 ONNX 推理, 无外部服务依赖; 首次使用下载模型."""
+
+    OPENAI_COMPATIBLE = "openai_compatible"
+    """标准 ``POST {base_url}/embeddings``, 可指向 Ollama / llama.cpp / TEI 等."""
+
+
+class VectorEngine(StrEnum):
+    """向量索引后端."""
+
+    SQLITE_VEC = "sqlite_vec"
+    """``vec0`` 虚表, 需在独立连接上加载原生扩展."""
+
+    PYTHON = "python"
+    """应用侧内积, 零扩展; 扩展不可用时的回退."""
+
+
+class EmbeddingConfig(BaseModel):
+    """嵌入端点配置. 与 llm / agent section 隔离, 凭据不共用."""
+
+    provider: EmbeddingProviderName = EmbeddingProviderName.FAST_EMBED
+    model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    """内嵌时是 fastembed 模型名, HTTP 时原样作为 ``model`` 字段发出."""
+
+    dim: int = Field(default=384, ge=8, le=8192)
+    """必须与模型实际维度一致; 不符时嵌入直接报错而不是静默降级."""
+
+    base_url: str = "http://127.0.0.1:11434/v1"
+    """仅 ``openai_compatible`` 使用; 末尾 ``/embeddings`` 由代码追加."""
+
+    api_key: str | None = None
+    batch_size: int = Field(default=16, ge=1, le=256)
+    timeout_s: float = Field(default=30.0, ge=1.0, le=600.0)
+    threads: int | None = Field(default=None, ge=1, le=64)
+    """仅内嵌使用; 空表示交给 onnxruntime 默认 (通常等于物理核数)."""
+
+
+class FusionConfig(BaseModel):
+    """关键词与向量的融合参数."""
+
+    zgate: float = Field(default=2.0, ge=0.0, le=10.0)
+    """语义门控: 余弦相似度的 z 分数低于此值判为"未命中", 避免硬塞低分结果."""
+
+    word_weight: float = Field(default=2.0, ge=0.0, le=10.0)
+    """关键词命中的加分权重; 精确实体 (番号/人名) 不应被语义门控滤掉."""
+
+    vector_k: int = Field(default=200, ge=1, le=5000)
+    """向量路召回上限. 融合后取前 limit 条, 因此应显著大于翻页上限."""
+
+
+class SearchConfig(BaseModel):
+    """检索开关与参数. 三个开关正交, 全关等价于旧行为."""
+
+    keyword_enabled: bool = True
+    vector_enabled: bool = False
+    """默认关闭: 首次开启会下载模型并对全库回填向量, 属于显式动作."""
+
+    hybrid_enabled: bool = True
+    """是否走 z-gate 融合. 只在两路同时开启时起作用, 判据见 ``fused``; 关闭则两路各自排序后拼接.
+
+    **保留用户意图, 不因暂时没有向量路而改写这个值**: 早先的 ``after`` 校验器会在
+    ``vector_enabled=False`` 时把它改成 False 并落盘, 之后用户再打开向量也拿不到融合.
+    """
+
+    vector_engine: VectorEngine = VectorEngine.SQLITE_VEC
+    embedding: EmbeddingConfig = EmbeddingConfig()
+    fusion: FusionConfig = FusionConfig()
+
+    @property
+    def fused(self) -> bool:
+        """本次检索是否真的会融合. 两路都开且用户要融合, 才是 ``SearchMode.HYBRID`` 的融合分支."""
+        return self.hybrid_enabled and self.keyword_enabled and self.vector_enabled
 
 
 class AgentThinkingMode(StrEnum):
@@ -814,6 +911,7 @@ class HotSettings(BaseModel):
     sr: SrConfig = SrConfig()
     watermark: WatermarkConfig = WatermarkConfig()
     llm: LLMConfig = LLMConfig()
+    search: SearchConfig = SearchConfig()
     r18: R18Config = R18Config()
     watcher: WatcherConfig = WatcherConfig()
     everything: EverythingConfig = EverythingConfig()

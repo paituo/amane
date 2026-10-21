@@ -320,3 +320,44 @@ class TestMetadataHttp:
         listed = await client.get("metadata?search=LOCK-102")
         assert listed.status_code == 200
         assert listed.json()["items"][0]["locked_fields"] == ["title"]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_search_covers_plot_and_actors(self, client: AsyncClient, repo: Repository, app: FastAPI):
+        """旧实现只 ILIKE number 与 title; 索引接管后简介与演员也能搜到, 并声明 search_mode."""
+        meta = await repo.upsert_metadata(
+            number="SRCH-001", title="夜勤の記録", plot="关于医院夜班的故事", actors=["葵つかさ"]
+        )
+        assert meta.id is not None
+        await app.state.runtime.search.indexer.drain()
+
+        by_plot = await client.get("metadata?search=医院夜班")
+        body = by_plot.json()
+        assert [item["number"] for item in body["items"]] == ["SRCH-001"]
+        assert body["search_mode"] in {"keyword", "vector", "hybrid"}
+
+        by_actor = await client.get("metadata?search=葵つかさ")
+        assert [item["number"] for item in by_actor.json()["items"]] == ["SRCH-001"]
+
+        # 番号原形 / 归一形 / 分段形同解
+        for query in ("SRCH-001", "srch001", "SRCH 001"):
+            assert [item["number"] for item in (await client.get(f"metadata?search={query}")).json()["items"]] == [
+                "SRCH-001"
+            ]
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_search_survives_filters_and_paging(self, client: AsyncClient, repo: Repository, app: FastAPI):
+        """检索结果仍与其它筛选取交集, 且按相关度而非库内排序返回."""
+        for index in range(3):
+            await repo.upsert_metadata(number=f"PAGE-{index:03d}", title=f"共演 第{index}话", actors=["共演者"])
+        await app.state.runtime.search.indexer.drain()
+
+        all_hits = await client.get("metadata?search=共演&limit=10")
+        assert all_hits.status_code == 200
+        assert len(all_hits.json()["items"]) == 3
+
+        paged = await client.get("metadata?search=共演&limit=1&offset=1")
+        assert len(paged.json()["items"]) == 1
+        assert paged.json()["search_mode"] in {"keyword", "vector", "hybrid"}
+
+        filtered = await client.get("metadata?search=共演&content_type=uncensored&limit=10")
+        assert filtered.json()["items"] == []

@@ -112,6 +112,46 @@
         }
       }
     },
+    "/api/config/probe": {
+      "post": {
+        "tags": [
+          "config"
+        ],
+        "summary": "Probe Config",
+        "description": "对一个配置分区做自检, 边跑边把步骤推给前端.\n\n``values`` 存在时按\"未保存的表单值\"测: ``preview`` 只做校验与合并, 不落盘也不触发 rebuild,\n所以点一次测试不会顺手改掉线上配置. 校验失败照常 422 —— 连 Pydantic 都过不了的配置没必要发请求.\n\n单步失败只体现在事件里, 流始终以 ``done`` 收尾: 一次测试的产出就是这份日志, 用 5xx 表达\n\"代理不通\"会让前端拿不到已经产生的那几步 (与 ``/api/network/check`` 同一取向).",
+        "operationId": "probe_config",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigProbeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/libraries/{library_id}/cleanup/inventory": {
       "get": {
         "tags": [
@@ -7718,6 +7758,34 @@
         ],
         "title": "CommentUpdateRequest"
       },
+      "ConfigProbeRequest": {
+        "properties": {
+          "section": {
+            "type": "string",
+            "title": "Section",
+            "description": "HotSettings 的 section 名: llm / agent / search / network"
+          },
+          "values": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Values",
+            "description": "该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试"
+          }
+        },
+        "type": "object",
+        "required": [
+          "section"
+        ],
+        "title": "ConfigProbeRequest",
+        "description": "配置自检请求.\n\n``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),\n这样改完还没保存也能先验证; 不传则按已保存的配置测."
+      },
       "ConnectivityCheckRequest": {
         "properties": {
           "source_ids": {
@@ -8107,6 +8175,81 @@
         ],
         "title": "DownloadableResource",
         "description": "影片附属资源类型: 刮削写入 Resource, 整理时按库配置复制到库路径."
+      },
+      "EmbeddingConfig": {
+        "properties": {
+          "provider": {
+            "$ref": "#/components/schemas/EmbeddingProviderName",
+            "default": "fastembed"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model",
+            "default": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+          },
+          "dim": {
+            "type": "integer",
+            "maximum": 8192.0,
+            "minimum": 8.0,
+            "title": "Dim",
+            "default": 384
+          },
+          "base_url": {
+            "type": "string",
+            "title": "Base Url",
+            "default": "http://127.0.0.1:11434/v1"
+          },
+          "api_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Api Key"
+          },
+          "batch_size": {
+            "type": "integer",
+            "maximum": 256.0,
+            "minimum": 1.0,
+            "title": "Batch Size",
+            "default": 16
+          },
+          "timeout_s": {
+            "type": "number",
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Timeout S",
+            "default": 30.0
+          },
+          "threads": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 64.0,
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threads"
+          }
+        },
+        "type": "object",
+        "title": "EmbeddingConfig",
+        "description": "嵌入端点配置. 与 llm / agent section 隔离, 凭据不共用."
+      },
+      "EmbeddingProviderName": {
+        "type": "string",
+        "enum": [
+          "fastembed",
+          "openai_compatible"
+        ],
+        "title": "EmbeddingProviderName",
+        "description": "嵌入实现. 两者对上层同协议, 换实现不改变索引存储格式."
       },
       "ErrorRow": {
         "properties": {
@@ -9152,6 +9295,34 @@
         "title": "FootprintNoticeKind",
         "description": "未能纳入清单的项. 只给码与参数, 文案由面板按界面语言给出."
       },
+      "FusionConfig": {
+        "properties": {
+          "zgate": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Zgate",
+            "default": 2.0
+          },
+          "word_weight": {
+            "type": "number",
+            "maximum": 10.0,
+            "minimum": 0.0,
+            "title": "Word Weight",
+            "default": 2.0
+          },
+          "vector_k": {
+            "type": "integer",
+            "maximum": 5000.0,
+            "minimum": 1.0,
+            "title": "Vector K",
+            "default": 200
+          }
+        },
+        "type": "object",
+        "title": "FusionConfig",
+        "description": "关键词与向量的融合参数."
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -9670,6 +9841,28 @@
               "base_url": "https://api.openai.com/v1",
               "model": "",
               "rate_limit": 2.0
+            }
+          },
+          "search": {
+            "$ref": "#/components/schemas/SearchConfig",
+            "default": {
+              "keyword_enabled": true,
+              "vector_enabled": false,
+              "hybrid_enabled": true,
+              "vector_engine": "sqlite_vec",
+              "embedding": {
+                "base_url": "http://127.0.0.1:11434/v1",
+                "batch_size": 16,
+                "dim": 384,
+                "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+                "provider": "fastembed",
+                "timeout_s": 30.0
+              },
+              "fusion": {
+                "vector_k": 200,
+                "word_weight": 2.0,
+                "zgate": 2.0
+              }
             }
           },
           "r18": {
@@ -11539,6 +11732,15 @@
           "total": {
             "type": "integer",
             "title": "Total"
+          },
+          "search_mode": {
+            "$ref": "#/components/schemas/SearchMode",
+            "default": "like"
+          },
+          "search_degraded": {
+            "type": "boolean",
+            "title": "Search Degraded",
+            "default": false
           }
         },
         "type": "object",
@@ -14111,6 +14313,62 @@
         "type": "object",
         "title": "ScrapingConfig"
       },
+      "SearchConfig": {
+        "properties": {
+          "keyword_enabled": {
+            "type": "boolean",
+            "title": "Keyword Enabled",
+            "default": true
+          },
+          "vector_enabled": {
+            "type": "boolean",
+            "title": "Vector Enabled",
+            "default": false
+          },
+          "hybrid_enabled": {
+            "type": "boolean",
+            "title": "Hybrid Enabled",
+            "default": true
+          },
+          "vector_engine": {
+            "$ref": "#/components/schemas/VectorEngine",
+            "default": "sqlite_vec"
+          },
+          "embedding": {
+            "$ref": "#/components/schemas/EmbeddingConfig",
+            "default": {
+              "provider": "fastembed",
+              "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+              "dim": 384,
+              "base_url": "http://127.0.0.1:11434/v1",
+              "batch_size": 16,
+              "timeout_s": 30.0
+            }
+          },
+          "fusion": {
+            "$ref": "#/components/schemas/FusionConfig",
+            "default": {
+              "zgate": 2.0,
+              "word_weight": 2.0,
+              "vector_k": 200
+            }
+          }
+        },
+        "type": "object",
+        "title": "SearchConfig",
+        "description": "检索开关与参数. 三个开关正交, 全关等价于旧行为."
+      },
+      "SearchMode": {
+        "type": "string",
+        "enum": [
+          "like",
+          "keyword",
+          "vector",
+          "hybrid"
+        ],
+        "title": "SearchMode",
+        "description": "本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.\n\n定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方\n(路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed)."
+      },
       "SelectionNoticeResponse": {
         "properties": {
           "kind": {
@@ -15827,6 +16085,15 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VectorEngine": {
+        "type": "string",
+        "enum": [
+          "sqlite_vec",
+          "python"
+        ],
+        "title": "VectorEngine",
+        "description": "向量索引后端."
       },
       "WatcherConfig": {
         "properties": {

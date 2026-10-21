@@ -19,6 +19,7 @@
 | 前端文件索引 (路由 → 文件) | [frontend.md](frontend.md) |
 | 表结构 / 迁移 | [database.md](database.md) |
 | 翻译 / LLM | [llm.md](llm.md) |
+| 检索 (关键词 / 向量 / 混合) | [search.md](search.md) |
 | 助理 (首页对话) | [agent.md](agent.md) |
 | 排障 / 回放刮削 | [observability.md](observability.md) |
 | RSS/Atom 远程发现 | [feeds.md](feeds.md) |

@@ -216,6 +216,34 @@ class TestScrapeHandler:
         ]
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_failed_scrape_keeps_media_file_pending(
+        self, repo: Repository, resource_store, tmp_path: Path
+    ):
+        """P2-⑧ 续跑不变量: 刮削失败不得把 media_file 推离 PENDING.
+
+        若失败会把状态写成 FAILED/SKIP, 默认 ``RefreshPayload.scrape={PENDING}`` 的后续 REFRESH
+        就再也扇不出该文件, "一键重跑全失败" 名存实亡. 现状下失败路径只经 ``test_no_results_marks_failed``
+        报告失败, 不触碰 ``finalize_media_file`` (仅成功路径写 SCRAPED), 因此媒体文件应保持 PENDING.
+        """
+        empty_factory = FakeFactory({"javdb": EmptySearchCrawler()})
+        h = ScrapeHandler(repo=repo, factory=empty_factory, resource_store=resource_store, pipeline_config=HotSettings())
+        media = await repo.create_media_file(library_id=1, path="/media/TEST-001.mp4")
+        assert media.status == MediaFileStatus.PENDING
+        recorder = Recorder.begin(
+            tmp_path, Task(id=95, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
+        )
+        try:
+            result = await h.handle(
+                ScrapePayload(media_file_id=media.id, number="TEST-001", content_type=ContentType.CENSORED)
+            )
+        finally:
+            recorder.close()
+        assert result.success is False
+        updated = await repo.get_media_file(media.id)
+        assert updated is not None
+        assert updated.status == MediaFileStatus.PENDING  # 关键: 失败不把状态推离 PENDING
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_empty_scalars_with_image_still_succeeds(self, repo: Repository, resource_store):
         """标量全空但有海报 → 仍算抓到数据, 不整单失败."""
 
@@ -1073,3 +1101,176 @@ class TestRefreshHandler:
         assert result.result.scrape == n
         scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
         assert len(scrapes) == n
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_failed_file_refanned_by_default_refresh(
+        self, repo: Repository, resource_store, tmp_path: Path
+    ):
+        """P2-⑧ 端到端: 刮削失败的 PENDING 文件, 下一次默认 REFRESH 仍重新扇出 SCRAPE (续跑可用).
+
+        SCRAPE 不在 ``_EXCLUSIVE_FIELDS`` 中 (tasks.py), ``_insert_or_reuse`` 总会新建任务, 因此即便
+        上一次 SCRAPE 已 FAILED, 只要 media_file 仍是 PENDING, 后续 REFRESH 就能重新派生新 SCRAPE 任务.
+        """
+        video = tmp_path / "TEST-001.mp4"
+        video.write_bytes(b"\x00" * 100)
+        first = await RefreshHandler(repo=repo).handle(RefreshPayload(library_id=1, path=str(tmp_path)))
+        assert first.success is True and first.result is not None and first.result.scrape == 1
+
+        media = await repo.get_media_file_by_path(str(video))
+        assert media is not None and media.status == MediaFileStatus.PENDING
+
+        # 模拟该 SCRAPE 失败 (无可用元数据).
+        empty_h = ScrapeHandler(
+            repo=repo,
+            factory=FakeFactory({"javdb": EmptySearchCrawler()}),
+            resource_store=resource_store,
+            pipeline_config=HotSettings(),
+        )
+        rec = Recorder.begin(
+            tmp_path, Task(id=96, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
+        )
+        try:
+            failed = await empty_h.handle(
+                ScrapePayload(media_file_id=media.id, number="TEST-001", content_type=ContentType.CENSORED)
+            )
+        finally:
+            rec.close()
+        assert failed.success is False
+        after_fail = await repo.get_media_file(media.id)
+        assert after_fail is not None and after_fail.status == MediaFileStatus.PENDING
+
+        # 默认 REFRESH (scrape={PENDING}) 重新扇出该文件 -> 续跑成立.
+        second = await RefreshHandler(repo=repo).handle(RefreshPayload(library_id=1, path=str(tmp_path)))
+        assert second.success is True and second.result is not None and second.result.scrape == 1
+
+
+# --- 批次级 skip-list (disabled_sources) ---
+
+
+class _TallyCrawler:
+    """记录被真正 ``fetch`` 的次数; 用于验证被跳过的来源不触网."""
+
+    def __init__(self, name: str, tally: dict[str, int], metadata: MediaMetadata) -> None:
+        self.name = name
+        self._tally = tally
+        self._metadata = metadata
+
+    async def fetch(self, query, options=None) -> MediaMetadata:
+        self._tally[self.name] += 1
+        return self._metadata
+
+
+class _TallyFactory:
+    def __init__(self, available: dict) -> None:
+        self._available = available
+        self.fetched: list[str] = []
+
+    async def get_crawlers(self, names):
+        return {n: self._available[n] for n in names if n in self._available}
+
+    async def get(self, name):
+        return self._available.get(name)
+
+
+class _StubAvailability:
+    def __init__(self, disabled: set[str]) -> None:
+        self._disabled = disabled
+
+    async def disabled_sources(self) -> frozenset[str]:  # type: ignore[valid-type]
+        return frozenset(self._disabled)
+
+
+class TestScrapeHandlerDisabledSources:
+    """disabled_sources 在建图阶段就把死站排除, 记为 SKIPPED (不触网、不计失败)."""
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_disabled_source_skipped_not_fetched(self, repo: Repository, resource_store, tmp_path: Path):
+        tally = {"javdb": 0, "dmm": 0}
+        factory = _TallyFactory(
+            {
+                "javdb": _TallyCrawler("javdb", tally, MediaMetadata(number="MIDV-123", title="JavDB")),
+                "dmm": _TallyCrawler("dmm", tally, MediaMetadata(number="MIDV-123", title="DMM")),
+            }
+        )
+        config = _config_with({ContentType.CENSORED: [SiteName.JAVDB, SiteName.DMM]})
+        h = ScrapeHandler(
+            repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config
+        )
+        media = await repo.create_media_file(library_id=1, path="/media/MIDV-123.mp4")
+        recorder = Recorder.begin(
+            tmp_path, Task(id=1, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
+        )
+        try:
+            result = await h.handle(
+                ScrapePayload(
+                    media_file_id=media.id,
+                    number="MIDV-123",
+                    content_type=ContentType.CENSORED,
+                    disabled_sources={"dmm"},
+                )
+            )
+        finally:
+            recorder.close()
+
+        assert result.success is True
+        # dmm 被跳过, 不应被请求; javdb 仍被请求并取到数据.
+        assert tally == {"javdb": 1, "dmm": 0}
+        outcomes = {(o.site, str(o.outcome)) for o in result.result.outcomes}
+        assert ("dmm", "skipped") in outcomes
+        assert ("javdb", "ok") in outcomes
+        # 元数据仍来自未跳过的 javdb.
+        metadata = await repo.get_metadata_by_number("MIDV-123")
+        assert metadata is not None
+        assert metadata.title == "JavDB"
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_empty_disabled_keeps_all_sources(self, repo: Repository, resource_store, tmp_path: Path):
+        """disabled_sources 为空 (默认) 时行为不变: 所有 route 来源照常请求."""
+        tally = {"javdb": 0, "dmm": 0}
+        factory = _TallyFactory(
+            {
+                "javdb": _TallyCrawler("javdb", tally, MediaMetadata(number="MIDV-123", title="JavDB")),
+                "dmm": _TallyCrawler("dmm", tally, MediaMetadata(number="MIDV-123", title="DMM")),
+            }
+        )
+        config = _config_with({ContentType.CENSORED: [SiteName.JAVDB, SiteName.DMM]})
+        h = ScrapeHandler(
+            repo=repo, factory=factory, resource_store=resource_store, pipeline_config=config
+        )
+        media = await repo.create_media_file(library_id=1, path="/media/MIDV-123.mp4")
+        recorder = Recorder.begin(
+            tmp_path, Task(id=2, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
+        )
+        try:
+            await h.handle(
+                ScrapePayload(
+                    media_file_id=media.id, number="MIDV-123", content_type=ContentType.CENSORED
+                )
+            )
+        finally:
+            recorder.close()
+        assert tally == {"javdb": 1, "dmm": 1}
+
+
+class TestRefreshHandlerDisabledInjection:
+    """REFRESH 扇出前探测一次, 把不可用来源写进每个派生 SCRAPE 的 payload."""
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_injects_disabled_sources(self, repo: Repository, tmp_path: Path):
+        (tmp_path / "MIDV-123.mp4").write_bytes(b"\x00" * 100)
+        handler = RefreshHandler(repo=repo, availability=_StubAvailability({"javdb"}))
+        result = await handler.handle(RefreshPayload(library_id=1, path=str(tmp_path)))
+        assert result.success is True
+        scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
+        assert len(scrapes) == 1
+        assert set(scrapes[0].payload["disabled_sources"]) == {"javdb"}
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_no_availability_yields_empty_disabled(self, repo: Repository, tmp_path: Path):
+        """未注入可用性服务时 (默认), payload 不带任何禁用来源."""
+        (tmp_path / "MIDV-123.mp4").write_bytes(b"\x00" * 100)
+        handler = RefreshHandler(repo=repo)
+        result = await handler.handle(RefreshPayload(library_id=1, path=str(tmp_path)))
+        scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
+        assert len(scrapes) == 1
+        assert scrapes[0].payload["disabled_sources"] == []

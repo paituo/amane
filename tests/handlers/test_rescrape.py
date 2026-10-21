@@ -169,6 +169,39 @@ def test_legacy_schedule_payload_defaults_to_metadata():
     assert payload.limit == 10
 
 
+# --- 批次级 skip-list (disabled_sources) ---
+
+
+class _StubAvailability:
+    def __init__(self, disabled: set[str]) -> None:
+        self._disabled = disabled
+
+    async def disabled_sources(self) -> frozenset[str]:  # type: ignore[valid-type]
+        return frozenset(self._disabled)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_rescrape_injects_disabled_sources(repo: Repository):
+    """影片补刮扇出的 SCRAPE 携带 disabled_sources; 演员补刮不改 (由熔断器覆盖)."""
+    await repo.upsert_metadata(number="A-001")
+    handler = RescrapeHandler(repo, availability=_StubAvailability({"javdb"}))
+    result = await handler.handle(RescrapePayload(limit=10))
+    assert result.result is not None
+    scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
+    assert len(scrapes) == 1
+    assert set(scrapes[0].payload["disabled_sources"]) == {"javdb"}
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_rescrape_no_availability_yields_empty_disabled(repo: Repository):
+    await repo.upsert_metadata(number="B-002")
+    handler = RescrapeHandler(repo)
+    result = await handler.handle(RescrapePayload(limit=10))
+    scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]
+    assert len(scrapes) == 1
+    assert scrapes[0].payload["disabled_sources"] == []
+
+
 # --- 非法 payload (边界用例) ---
 
 INVALID_PAYLOADS = [

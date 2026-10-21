@@ -17,6 +17,7 @@ from amane.config import (
     DownloadableResource,
     HotSettings,
     ScrapingConfig,
+    SearchConfig,
     SiteConfig,
     WatermarkConfig,
     WorkerConfig,
@@ -699,3 +700,31 @@ class TestLLMConfig:
 
         with pytest.raises(ValidationError, match=r"Input should be 'chat', 'response' or 'anthropic'"):
             mgr.update({"llm": {"api_type": "bogus"}})
+
+
+class TestSearchConfigSwitches:
+    """三个开关正交; ``hybrid_enabled`` 是用户意图, 不因当下没有向量路而被改写."""
+
+    def test_hybrid_intent_survives_without_vector(self) -> None:
+        """默认配置下向量关着, 但用户想要的"融合"不能被抹掉 —— 否则开了向量也拿不到融合."""
+        config = SearchConfig()
+
+        assert config.vector_enabled is False
+        assert config.hybrid_enabled is True
+        assert config.fused is False  # 没有向量路, 实际不融合
+
+    def test_enabling_vector_restores_fusion(self) -> None:
+        """先关向量、再打开, 融合应该自己回来, 不需要用户再点一次混合开关."""
+        config = SearchConfig(vector_enabled=False)
+        assert config.fused is False
+
+        enabled = config.model_copy(update={"vector_enabled": True})
+
+        assert enabled.hybrid_enabled is True
+        assert enabled.fused is True
+
+    def test_fusion_needs_both_paths(self) -> None:
+        """只留向量时没有关键词路可融合, ``fused`` 必须是 False (此时 mode 是 vector)."""
+        config = SearchConfig(keyword_enabled=False, vector_enabled=True)
+
+        assert config.fused is False

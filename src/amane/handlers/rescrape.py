@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from ..db import ActorSortField, TaskType
 from ..db.models import MetadataSortField, SortOrder
+from ..scrape_availability import SourceAvailability
 from .models import (
     ActorScrapePayload,
     CacheKind,
@@ -22,9 +23,11 @@ _USE_CACHE = {CacheKind.metadata, CacheKind.trans}
 
 
 class RescrapeHandler(TaskHandler[RescrapePayload, RescrapeResult]):
-    def __init__(self, repo: Repository) -> None:
+    def __init__(self, repo: Repository, availability: SourceAvailability | None = None) -> None:
         super().__init__(payload_t=RescrapePayload, result_t=RescrapeResult)
         self._repo = repo
+        # 批次级来源可用性缓存: 派生影片 SCRAPE 时把不可用来源写进 disabled_sources (演员补刮由熔断器覆盖).
+        self._availability = availability
 
     async def handle(self, payload: RescrapePayload) -> TaskResult[RescrapeResult]:
         updated_before = (
@@ -61,6 +64,8 @@ class RescrapeHandler(TaskHandler[RescrapePayload, RescrapeResult]):
         if not identified:
             return []
 
+        disabled = await self._availability.disabled_sources() if self._availability is not None else frozenset()
+
         return [
             FollowupTask(
                 key=f"scrape:{meta_id}",
@@ -69,6 +74,7 @@ class RescrapeHandler(TaskHandler[RescrapePayload, RescrapeResult]):
                     number=meta.number,
                     content_type=meta.content_type,
                     use_cache=_USE_CACHE,
+                    disabled_sources=disabled,
                 ).model_dump(mode="json"),
                 priority=-1,
             )

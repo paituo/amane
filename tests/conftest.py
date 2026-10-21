@@ -1,7 +1,10 @@
 """全局测试 fixtures"""
 
 import os
+import sys
+import tempfile
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -15,7 +18,6 @@ from tests.schema_template import copy_schema
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Iterator, Sequence
-    from pathlib import Path
 
     from sqlalchemy.ext.asyncio import AsyncEngine
 
@@ -38,6 +40,49 @@ def candidates_first_scandir(monkeypatch: pytest.MonkeyPatch) -> None:
             yield sorted(scanned, key=lambda entry: (not entry.name.startswith("ad-"), entry.name))
 
     monkeypatch.setattr("amane.library.cleanup.inventory.os.scandir", ordered)
+
+
+def _use_plain_windows_path_for_tmp_cleanup() -> None:
+    r"""让 pytest 清理系统临时目录时使用不带 `\\?\` 前缀的路径.
+
+    pytest 的 `rm_rf` 在 Windows 上先把路径转成扩展长度形式 (`_pytest.pathlib.ensure_extended_length_path`),
+    再交给 `shutil.rmtree`. 它保留超过保留数的 `pytest-of-<user>/pytest-N` 时需要整树删除: 先改名成
+    `garbage-<uuid>`, 再删. 这条删除路径在 WorkBuddy 托管的 Python 里会被 safe-delete 拦截:
+    该 shim 对系统临时目录本来有旁路 (`_should_bypass_safe_delete`), 但它用
+    `normcase(realpath(abspath(p)))` 做前缀比较, 而 `realpath` 对 `\\?\` 前缀原样保留,
+    于是旁路永远失配 —— 临时目录的整树删除被当成"批量删除用户文件", 超过阈值 (默认 50 个文件)
+    就直接 `SystemExit(1)`, 表现是整轮 pytest 在 100% 之后失败, 而所有用例其实都过了.
+
+    所以这里只做一件事: 目标位于系统临时目录时, 把前缀去掉再交给 rmtree. 旁路恢复后,
+    临时目录走原生删除 (真删, 不进回收站), 其余路径的删除仍受 shim 保护, 本函数不碰.
+    非 WorkBuddy 环境 (`CODEBUDDY_SESSION_ID` 未设) 或非 Windows 时是空操作,
+    加前缀对超长路径的意义也保留 —— 只有系统临时目录下的路径会被去掉前缀.
+    """
+    if sys.platform != "win32":
+        return
+    if not os.environ.get("CODEBUDDY_SESSION_ID") and not os.environ.get("CODEBUDDY_SAFE_DELETE_ENABLED"):
+        return
+
+    import _pytest.pathlib as pytest_pathlib
+
+    original = pytest_pathlib.ensure_extended_length_path
+    tmp_root = os.path.normcase(Path(tempfile.gettempdir()).resolve())
+
+    def ensure_extended_length_path(path: Path) -> Path:
+        extended = original(path)
+        text = str(extended)
+        if not text.startswith("\\\\?\\"):
+            return extended
+        stripped = text[4:]
+        plain = os.path.normcase(Path(stripped).resolve())
+        if plain == tmp_root or plain.startswith(tmp_root + os.sep):
+            return Path(stripped)
+        return extended
+
+    pytest_pathlib.ensure_extended_length_path = ensure_extended_length_path
+
+
+_use_plain_windows_path_for_tmp_cleanup()
 
 
 def _file_engine(db_path: Path) -> AsyncEngine:

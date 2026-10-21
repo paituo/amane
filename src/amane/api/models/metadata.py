@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, Field, field_validator
 
 from ...db import Metadata
-from ...enums import ActorGender, MetadataField
+from ...enums import ActorGender, MetadataField, SearchMode
 from ...handlers import CacheKind
 from ...parsing import ContentType, Mosaic
 from ...utils.model import anyof_extras, create_partial_model, kv
@@ -102,6 +102,14 @@ PartialMetadata = create_partial_model(
 class MetadataListResponse(BaseModel):
     items: list[MetadataResponse]
     total: int
+    search_mode: SearchMode = SearchMode.LIKE
+    """本次检索实际走的路径; 未启用索引时为 ``like`` (旧的子串扫描).
+
+    ``total`` 的含义随它变化, 客户端翻页前必须先看这个字段, 见 ``docs/dev/search.md``.
+    """
+
+    search_degraded: bool = False
+    """要求走向量但向量路不可用, 已退回关键词."""
 
 
 class MetadataDetailResponse(BaseModel):

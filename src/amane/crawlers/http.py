@@ -2,6 +2,10 @@
 
 按来源的浏览器策略经 ``for_source`` 派生绑定来源的视图: ``auto`` (默认) 先直连, 首次命中 Cloudflare
 挑战后该来源改用浏览器并保持; ``always`` 一律渲染, ``off`` 一律直连. ``get_json`` 不做 HTML 拦截启发式.
+
+挑战页的降级覆盖两条路径: 直连**拿到 2xx 挑战页** (正文启发式) 与直连**以 403/503 失败** (失败语义) ——
+后者是 Cloudflare 的常见返回形态, ``WebClient`` 对非 2xx 直接抛错, 正文分类没机会跑, 因此失败路径
+也要能降级 (见 ``_BROWSER_SOLVABLE_REASONS``).
 """
 
 from __future__ import annotations
@@ -20,6 +24,12 @@ if TYPE_CHECKING:
 from ..enums import BrowserMode
 from ..net.connectivity import ConnectivityOutcome, probe_get
 from ..net.errors import FailureKind, FailureReason, RequestError, RequestFailure, SourceError, classify_block
+
+# 浏览器可解决的失败 (P3-⑨): Cloudflare JS 挑战. 挑战页常以 403/503 返回, ``WebClient`` 对非 2xx
+# 直接抛错, 因此 ``get_html`` 的失败路径也要能降级 —— 与 2xx 挑战页共用同一条切换路径
+# (``_browser_required``). 其余失败不在此列: IP 封禁/地域限制换浏览器同样无解 (同一出口 IP),
+# 连接错误/超时更不可能靠渲染解决, 盲目降级只会白起一次浏览器.
+_BROWSER_SOLVABLE_REASONS = frozenset({FailureReason.CLOUDFLARE_CHALLENGE})
 
 
 class HttpClient:
@@ -84,7 +94,20 @@ class HttpClient:
     ) -> str:
         if self._should_render(url):
             return await self.get_rendered(url, headers=headers, cookies=cookies)
-        text = await self.get_text(url, headers=headers, cookies=cookies, encoding=encoding)
+        try:
+            text = await self.get_text(url, headers=headers, cookies=cookies, encoding=encoding)
+        except RequestError as exc:
+            # curl 路径以非 2xx 失败: Cloudflare 挑战常以 403 返回, WebClient 直接抛错, 正文分类
+            # 没机会跑. 失败语义已知是浏览器可解决的挑战 → 走与 2xx 挑战页同一条降级路径; 其余失败
+            # (IP 封禁/地域限制/连接错误) 原样上抛, 不白起浏览器.
+            if (
+                exc.reason in _BROWSER_SOLVABLE_REASONS
+                and self._browser_mode is BrowserMode.AUTO
+                and self._browser_available()
+            ):
+                self._browser_required.add(self._scope(url))
+                return await self.get_rendered(url, headers=headers, cookies=cookies)
+            raise
         reason = classify_block(text)
         if reason is None:
             return text

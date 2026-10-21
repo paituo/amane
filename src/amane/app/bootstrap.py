@@ -31,7 +31,7 @@ from ..scheduler.service import WatcherService
 from ..scheduler.worker import AsyncWorker
 from ..utils.random_logging import run_random_logging
 from .proxy_failure_cache import ProxyFailureCache
-from .runtime import AppRuntime, build_handlers, build_network_stack, build_r18_db
+from .runtime import AppRuntime, build_handlers, build_network_stack, build_r18_db, build_search
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncEngine
@@ -94,6 +94,10 @@ class AppSession:
         with suppress(asyncio.CancelledError):
             await self._cron_task
         await self.runtime.stop_workers()
+        # 检索栈必须在引擎 dispose 之前关: 收尾还要读业务表补齐未落地的索引.
+        if self.runtime.search is not None:
+            self.runtime.repo.set_index_sink(None)
+            await self.runtime.search.aclose()
         if self.runtime.playback_factory is not None:
             await self.runtime.playback_factory.aclose()
         if self.runtime.browser is not None:
@@ -185,6 +189,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
         plugin_manager,
         library_locks=library_locks,
         inventory_store=inventory_store,
+        availability=stack.availability,
     )
 
     worker = AsyncWorker(
@@ -202,7 +207,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
     cron_scheduler = CronScheduler(repo)
     cron_task = asyncio.create_task(cron_scheduler.start())
 
-    feed_service = FeedService(repo, web_client)
+    feed_service = FeedService(repo, web_client, availability=stack.availability)
     feed_task = asyncio.create_task(feed_service.start())
 
     emitter_task: asyncio.Task[None] | None = None
@@ -225,6 +230,15 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
         logger.warning("watcher service not started", exc_info=True)
 
     playback_state = PlaybackState()
+    # 检索栈: 开关全关时为 None, 写入与查询都退回旧路径. 预热与回填都在后台跑, 不挡启动.
+    search_stack = build_search(hot, repo, cold.db_path, cold.data_dir)
+    if search_stack is not None:
+        await search_stack.store.open()
+        repo.set_index_sink(search_stack.indexer)
+        # 先预热再回填: 两者共享同一个加载任务, 下载只会发生一次.
+        search_stack.start_warmup()
+        search_stack.indexer.start()
+        search_stack.indexer.start_backfill()
     runtime = AppRuntime(
         repo=repo,
         config=config,
@@ -257,6 +271,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
             state=playback_state,
         ),
         browser=stack.browser,
+        search=search_stack,
     )
     agent_service.bridge.safe_dirs = None if safe_dirs is None else list(safe_dirs)
     agent_service.bridge.watcher = watcher_service

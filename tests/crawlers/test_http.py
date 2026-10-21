@@ -285,3 +285,145 @@ async def test_check_auto_switches_on_challenge_and_stays(mock_web, mock_browser
 
     assert second.status is ConnectivityStatus.OK
     mock_web.request.assert_not_awaited()
+
+
+# P3-⑨: curl 路径以非 2xx 失败时, 浏览器可解决的挑战同样降级渲染 (与 2xx 挑战页同一条切换路径).
+
+_CHALLENGE_BODY = b"<html><head><title>Just a moment...</title></head><body>_cf_chl_opt</body></html>"
+
+
+def _challenge_failure(status: int = 403) -> RequestFailure:
+    """Cloudflare 挑战页以 403/503 返回: 正文带 ``_cf_chl_opt``, 失败语义可判定."""
+
+    return RequestFailure(
+        kind=FailureKind.HTTP_STATUS, status=status, message=f"HTTP {status}", body=_CHALLENGE_BODY
+    )
+
+
+# 浏览器无解的失败: 同一出口 IP / 同一网络下渲染同样过不去, 降级只会白起一次浏览器.
+_NON_SOLVABLE_FAILURES: list[tuple[RequestFailure, FailureReason]] = [
+    (
+        RequestFailure(kind=FailureKind.HTTP_STATUS, status=403, message="HTTP 403", body=b"banned your access"),
+        FailureReason.IP_BANNED,
+    ),
+    (
+        RequestFailure(
+            kind=FailureKind.HTTP_STATUS, status=403, message="HTTP 403", body=b"not available in your region"
+        ),
+        FailureReason.GEO_RESTRICTED,
+    ),
+    (RequestFailure(kind=FailureKind.HTTP_STATUS, status=404, message="HTTP 404"), FailureReason.NOT_FOUND),
+    (RequestFailure(kind=FailureKind.TIMEOUT, message="timeout"), FailureReason.TIMEOUT),
+    (
+        RequestFailure(kind=FailureKind.CURL, message="curl error: 7", reason=FailureReason.CIRCUIT_OPEN),
+        FailureReason.CIRCUIT_OPEN,
+    ),
+]
+
+
+@pytest.mark.asyncio
+async def test_get_html_falls_back_to_browser_on_403_challenge(mock_web, mock_browser):
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
+    mock_browser.get_page.return_value = ("<html>rendered</html>", None)
+
+    assert await view.get_html(_URL) == "<html>rendered</html>"
+
+    call = mock_browser.get_page.await_args
+    assert call.args[0] == _URL
+    assert call.kwargs["scope"] == "minnano"
+
+
+@pytest.mark.asyncio
+async def test_get_html_403_challenge_switch_persists_for_scope(mock_web, mock_browser):
+    """首次 403 挑战降级后, 该来源后续请求直接走浏览器, 不再付一次 curl 失败."""
+
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
+    mock_browser.get_page.return_value = ("<html>rendered</html>", None)
+
+    await view.get_html(_URL)
+    mock_web.get_text.reset_mock()
+
+    second = await view.get_html("https://www.minnano-av.com/actress_list.php")
+
+    assert second == "<html>rendered</html>"
+    mock_web.get_text.assert_not_awaited()
+    assert mock_browser.get_page.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_get_html_403_challenge_without_browser_raises(mock_web):
+    client = HttpClient(web=mock_web, browser=None)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
+
+    with pytest.raises(RequestError) as exc:
+        await view.get_html(_URL)
+
+    assert exc.value.reason is FailureReason.CLOUDFLARE_CHALLENGE
+
+
+@pytest.mark.asyncio
+async def test_get_html_off_mode_403_challenge_raises(mock_web, mock_browser):
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig(use_browser=BrowserMode.OFF))
+    mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
+
+    with pytest.raises(RequestError):
+        await view.get_html(_URL)
+
+    mock_browser.get_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("failure", "reason"), _NON_SOLVABLE_FAILURES)
+async def test_get_html_non_solvable_failure_never_renders(
+    mock_web, mock_browser, failure: RequestFailure, reason: FailureReason
+):
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.get_text.side_effect = RequestError(_URL, failure)
+
+    with pytest.raises(RequestError) as exc:
+        await view.get_html(_URL)
+
+    assert exc.value.reason == reason
+    mock_browser.get_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_get_html_403_challenge_browser_failure_propagates(mock_web, mock_browser):
+    """降级后挑战仍未解决: 上抛, 不假装成功."""
+
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.get_text.side_effect = RequestError(_URL, _challenge_failure())
+    mock_browser.get_page.return_value = (
+        None,
+        RequestFailure(
+            kind=FailureKind.UNEXPECTED, message="challenge", reason=FailureReason.CLOUDFLARE_CHALLENGE
+        ),
+    )
+
+    with pytest.raises(RequestError) as exc:
+        await view.get_html(_URL)
+
+    assert exc.value.reason is FailureReason.CLOUDFLARE_CHALLENGE
+
+
+@pytest.mark.asyncio
+async def test_check_falls_back_to_browser_on_403_challenge(mock_web, mock_browser):
+    """探测层与刮削层同形态: 403 挑战也降级探测, 不会把可渲染的来源报成不可用."""
+
+    client = HttpClient(web=mock_web, browser=mock_browser)
+    view = client.for_source("minnano", SiteConfig())
+    mock_web.request.side_effect = RequestError(_URL, _challenge_failure())
+    mock_browser.get_page.return_value = ("<html>ok</html>", None)
+
+    outcome = await view.check(_URL)
+
+    assert outcome.status is ConnectivityStatus.OK
+    assert mock_browser.get_page.await_count == 1

@@ -11,10 +11,26 @@
     "logging": "Logging",
     "sr": "Super Resolution",
     "llm": "LLM Translation",
-    "watermark": "Watermark"
+    "watermark": "Watermark",
+    "search": "Search",
+    "everything": "Everything Index"
   },
   "config": {
     "loadError": "Failed to load configuration"
+  },
+  "probe": {
+    "action": "Test",
+    "title": "{{section}} · Connection test",
+    "running": "Testing…",
+    "passed": "Passed",
+    "failed": "Failed",
+    "elapsed": "{{ms}} ms total",
+    "rerun": "Run again",
+    "copy": "Copy log",
+    "copied": "Copied",
+    "waiting": "Waiting for the first step…",
+    "scopeHint": "Runs against the values in this form (including unsaved edits). Nothing is saved.",
+    "requestFailed": "Request failed: {{message}}"
   },
   "client": {
     "title": "Client settings",
@@ -759,6 +775,81 @@
       "history_max_sessions": {
         "label": "Session History Capacity",
         "description": "Max sessions kept in the history hot cache (LRU)"
+      }
+    },
+    "search": {
+      "keyword_enabled": {
+        "label": "Keyword search",
+        "description": "Inverted index over number, title, plot, actors, tags, series, studio, publisher"
+      },
+      "vector_enabled": {
+        "label": "Vector search",
+        "description": "Semantic recall; first enable downloads the model and backfills the whole library"
+      },
+      "hybrid_enabled": {
+        "label": "Hybrid search",
+        "description": "Fuse both paths by relevance when both are on; otherwise concatenate each ordering"
+      },
+      "vector_engine": {
+        "label": "Vector engine",
+        "description": "sqlite-vec uses the native extension; python scores in-process and gets slow on large libraries",
+        "options": {
+          "sqlite_vec": "sqlite-vec",
+          "python": "In-process dot product"
+        }
+      },
+      "embedding": {
+        "label": "Embedding model",
+        "description": "Both implementations speak the same protocol; switching one for the other does not change how vectors are stored",
+        "provider": {
+          "label": "Embedding provider",
+          "description": "In-process ONNX inference, or any OpenAI-compatible /v1/embeddings endpoint",
+          "options": {
+            "fastembed": "Embedded (fastembed)",
+            "openai_compatible": "OpenAI-compatible endpoint"
+          }
+        },
+        "model": {
+          "label": "Model",
+          "description": "FastEmbed model name when embedded; sent verbatim as model otherwise"
+        },
+        "dim": {
+          "label": "Vector dimension",
+          "description": "Must match the model; a mismatch fails loudly instead of degrading"
+        },
+        "base_url": {
+          "label": "Endpoint URL",
+          "description": "OpenAI-compatible provider only; /embeddings is appended"
+        },
+        "api_key": {
+          "label": "API key"
+        },
+        "batch_size": {
+          "label": "Batch size"
+        },
+        "timeout_s": {
+          "label": "Timeout (s)"
+        },
+        "threads": {
+          "label": "Inference threads",
+          "description": "Embedded provider only; empty uses the onnxruntime default"
+        }
+      },
+      "fusion": {
+        "label": "Fusion",
+        "description": "How keyword hits and semantic similarity are combined into one order",
+        "zgate": {
+          "label": "Semantic gate",
+          "description": "Cosine z-score below this counts as a miss; with fewer than ~300 rows it gates everything away"
+        },
+        "word_weight": {
+          "label": "Keyword bonus",
+          "description": "Flat bonus for keyword hits; exact number matches rank above it regardless"
+        },
+        "vector_k": {
+          "label": "Vector recall limit",
+          "description": "Paging deeper than this has no reliable ordering"
+        }
       }
     },
     "r18": {

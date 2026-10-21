@@ -30,6 +30,30 @@ if not config.get_main_option("sqlalchemy.url"):
 
 target_metadata = SQLModel.metadata
 
+#: 检索索引表由 ``amane.search.store`` 在运行时按需创建, 属可重建的派生数据:
+#: FTS5 虚表无法用 SQLModel 建模, 放进迁移只会让 autogenerate 提议删掉它们.
+#: vec0 表不在本库 (见 search.store 的模块说明), 因此不在此列. 必须显式排除:
+#: ``include_object`` 在反射之后才生效, 而影子表会在反射阶段被当成未知表.
+_RUNTIME_TABLES = frozenset(
+    {
+        "metadata_fts",
+        "metadata_fts_data",
+        "metadata_fts_idx",
+        "metadata_fts_content",
+        "metadata_fts_docsize",
+        "metadata_fts_config",
+        "metadata_embeddings",
+    }
+)
+
+
+def _include_object(object_: object, name: str | None, type_: str, reflected: bool, compare_to: object) -> bool:
+    """迁移只管业务表; 检索索引表与 FTS/vec 影子表一律跳过."""
+    del object_, reflected, compare_to
+    if type_ == "table" and name is not None:
+        return name not in _RUNTIME_TABLES
+    return True
+
 
 def run_migrations_offline() -> None:
     """以离线模式运行迁移"""
@@ -55,7 +79,12 @@ def run_migrations_online() -> None:
     connectable = config.attributes.get("connection")
 
     if connectable is not None:
-        context.configure(connection=connectable, target_metadata=target_metadata, transactional_ddl=True)
+        context.configure(
+            connection=connectable,
+            target_metadata=target_metadata,
+            transactional_ddl=True,
+            include_object=_include_object,
+        )
         with context.begin_transaction():
             context.run_migrations()
     else:
@@ -70,7 +99,12 @@ def run_migrations_online() -> None:
 
         try:
             with connectable.connect() as connection:
-                context.configure(connection=connection, target_metadata=target_metadata, transactional_ddl=True)
+                context.configure(
+                    connection=connection,
+                    target_metadata=target_metadata,
+                    transactional_ddl=True,
+                    include_object=_include_object,
+                )
                 with context.begin_transaction():
                     context.run_migrations()
                 connection.commit()

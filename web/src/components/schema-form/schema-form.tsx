@@ -146,6 +146,13 @@ interface SchemaFormProps {
   /** Extra disable gate for the primary action (e.g. parent envelope fields incomplete). */
   submitDisabled?: boolean;
   /**
+   * 字段区上方的自定义头部. 参数是**当前**表单值 (含未保存的改动).
+   *
+   * 设置页用它放分区标题与「测试」按钮: 测试必须能读到用户刚改还没保存的值,
+   * 而表单状态在 SchemaForm 内部, 回调是唯一不把整棵树提上去的出口.
+   */
+  header?: (values: Record<string, unknown>) => ReactNode;
+  /**
    * Field arrangement.
    * - `stack` (default): one field per row.
    * - `grid`: consecutive short scalars share a 2-col row on `sm+`.
@@ -165,6 +172,7 @@ export function SchemaForm({
   submitLabel,
   submitDisabled = false,
   fieldLayout = "stack",
+  header,
 }: SchemaFormProps) {
   const { t } = useTranslation("common");
   const formId = useId();
@@ -325,6 +333,15 @@ export function SchemaForm({
         form.handleSubmit();
       }}
     >
+      {header && (
+        <form.Subscribe
+          selector={(state) =>
+            isRecord(state.values) && isRecord(state.values[prefix]) ? state.values[prefix] : {}
+          }
+        >
+          {(sectionValues) => header(sectionValues as Record<string, unknown>)}
+        </form.Subscribe>
+      )}
       <Stack gap={0}>{fieldBlocks}</Stack>
       {actions}
     </Stack>

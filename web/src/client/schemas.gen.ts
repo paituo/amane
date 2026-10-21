@@ -1422,6 +1422,35 @@ export const CommentUpdateRequestSchema = {
     title: 'CommentUpdateRequest'
 } as const;
 
+export const ConfigProbeRequestSchema = {
+    properties: {
+        section: {
+            type: 'string',
+            title: 'Section',
+            description: 'HotSettings 的 section 名: llm / agent / search / network'
+        },
+        values: {
+            anyOf: [
+                {
+                    additionalProperties: true,
+                    type: 'object'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Values',
+            description: '该 section 的字段值; 提供时覆盖已保存配置, 仅用于本次测试'
+        }
+    },
+    type: 'object',
+    required: [
+        'section'
+    ],
+    title: 'ConfigProbeRequest',
+    description: '配置自检请求.\n\n``values`` 传该 section 的**表单值**时, 用它覆盖已保存配置来测试 (不落盘、不触发 rebuild),\n这样改完还没保存也能先验证; 不传则按已保存的配置测.'
+} as const;
+
 export const ConnectivityCheckRequestSchema = {
     properties: {
         source_ids: {
@@ -1821,6 +1850,83 @@ export const DownloadableResourceSchema = {
     ],
     title: 'DownloadableResource',
     description: '影片附属资源类型: 刮削写入 Resource, 整理时按库配置复制到库路径.'
+} as const;
+
+export const EmbeddingConfigSchema = {
+    properties: {
+        provider: {
+            $ref: '#/components/schemas/EmbeddingProviderName',
+            default: 'fastembed'
+        },
+        model: {
+            type: 'string',
+            title: 'Model',
+            default: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2'
+        },
+        dim: {
+            type: 'integer',
+            maximum: 8192,
+            minimum: 8,
+            title: 'Dim',
+            default: 384
+        },
+        base_url: {
+            type: 'string',
+            title: 'Base Url',
+            default: 'http://127.0.0.1:11434/v1'
+        },
+        api_key: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Api Key'
+        },
+        batch_size: {
+            type: 'integer',
+            maximum: 256,
+            minimum: 1,
+            title: 'Batch Size',
+            default: 16
+        },
+        timeout_s: {
+            type: 'number',
+            maximum: 600,
+            minimum: 1,
+            title: 'Timeout S',
+            default: 30
+        },
+        threads: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 64,
+                    minimum: 1
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Threads'
+        }
+    },
+    type: 'object',
+    title: 'EmbeddingConfig',
+    description: '嵌入端点配置. 与 llm / agent section 隔离, 凭据不共用.'
+} as const;
+
+export const EmbeddingProviderNameSchema = {
+    type: 'string',
+    enum: [
+        'fastembed',
+        'openai_compatible'
+    ],
+    title: 'EmbeddingProviderName',
+    description: '嵌入实现. 两者对上层同协议, 换实现不改变索引存储格式.'
 } as const;
 
 export const ErrorRowSchema = {
@@ -2896,6 +3002,35 @@ export const FootprintNoticeKindSchema = {
     description: '未能纳入清单的项. 只给码与参数, 文案由面板按界面语言给出.'
 } as const;
 
+export const FusionConfigSchema = {
+    properties: {
+        zgate: {
+            type: 'number',
+            maximum: 10,
+            minimum: 0,
+            title: 'Zgate',
+            default: 2
+        },
+        word_weight: {
+            type: 'number',
+            maximum: 10,
+            minimum: 0,
+            title: 'Word Weight',
+            default: 2
+        },
+        vector_k: {
+            type: 'integer',
+            maximum: 5000,
+            minimum: 1,
+            title: 'Vector K',
+            default: 200
+        }
+    },
+    type: 'object',
+    title: 'FusionConfig',
+    description: '关键词与向量的融合参数.'
+} as const;
+
 export const HTTPValidationErrorSchema = {
     properties: {
         detail: {
@@ -3416,6 +3551,28 @@ export const HotSettingsSchema = {
                 base_url: 'https://api.openai.com/v1',
                 model: '',
                 rate_limit: 2
+            }
+        },
+        search: {
+            $ref: '#/components/schemas/SearchConfig',
+            default: {
+                keyword_enabled: true,
+                vector_enabled: false,
+                hybrid_enabled: true,
+                vector_engine: 'sqlite_vec',
+                embedding: {
+                    base_url: 'http://127.0.0.1:11434/v1',
+                    batch_size: 16,
+                    dim: 384,
+                    model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+                    provider: 'fastembed',
+                    timeout_s: 30
+                },
+                fusion: {
+                    vector_k: 200,
+                    word_weight: 2,
+                    zgate: 2
+                }
             }
         },
         r18: {
@@ -5319,6 +5476,15 @@ export const MetadataListResponseSchema = {
         total: {
             type: 'integer',
             title: 'Total'
+        },
+        search_mode: {
+            $ref: '#/components/schemas/SearchMode',
+            default: 'like'
+        },
+        search_degraded: {
+            type: 'boolean',
+            title: 'Search Degraded',
+            default: false
         }
     },
     type: 'object',
@@ -7949,6 +8115,64 @@ export const ScrapingConfigSchema = {
     title: 'ScrapingConfig'
 } as const;
 
+export const SearchConfigSchema = {
+    properties: {
+        keyword_enabled: {
+            type: 'boolean',
+            title: 'Keyword Enabled',
+            default: true
+        },
+        vector_enabled: {
+            type: 'boolean',
+            title: 'Vector Enabled',
+            default: false
+        },
+        hybrid_enabled: {
+            type: 'boolean',
+            title: 'Hybrid Enabled',
+            default: true
+        },
+        vector_engine: {
+            $ref: '#/components/schemas/VectorEngine',
+            default: 'sqlite_vec'
+        },
+        embedding: {
+            $ref: '#/components/schemas/EmbeddingConfig',
+            default: {
+                provider: 'fastembed',
+                model: 'sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2',
+                dim: 384,
+                base_url: 'http://127.0.0.1:11434/v1',
+                batch_size: 16,
+                timeout_s: 30
+            }
+        },
+        fusion: {
+            $ref: '#/components/schemas/FusionConfig',
+            default: {
+                zgate: 2,
+                word_weight: 2,
+                vector_k: 200
+            }
+        }
+    },
+    type: 'object',
+    title: 'SearchConfig',
+    description: '检索开关与参数. 三个开关正交, 全关等价于旧行为.'
+} as const;
+
+export const SearchModeSchema = {
+    type: 'string',
+    enum: [
+        'like',
+        'keyword',
+        'vector',
+        'hybrid'
+    ],
+    title: 'SearchMode',
+    description: '本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.\n\n定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方\n(路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed).'
+} as const;
+
 export const SelectionNoticeResponseSchema = {
     properties: {
         kind: {
@@ -9706,6 +9930,16 @@ export const ValidationErrorSchema = {
         'type'
     ],
     title: 'ValidationError'
+} as const;
+
+export const VectorEngineSchema = {
+    type: 'string',
+    enum: [
+        'sqlite_vec',
+        'python'
+    ],
+    title: 'VectorEngine',
+    description: '向量索引后端.'
 } as const;
 
 export const WatcherConfigSchema = {

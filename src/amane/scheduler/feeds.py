@@ -16,6 +16,7 @@ from ..handlers.models import build_feed_scrape_payload
 from ..net.errors import RequestError
 from ..net.http import WebClient
 from ..parsing import extract_number
+from ..scrape_availability import SourceAvailability
 from .rss import ParsedFeedEntry, parse_feed_bytes
 
 if TYPE_CHECKING:
@@ -59,9 +60,12 @@ def resolve_entry_number(feed: Feed, entry: ParsedFeedEntry) -> str | None:
 class FeedService:
     """到期 Feed 拉取与去重; auto_enqueue 时按源顺序入队, 同番号取最新一条."""
 
-    def __init__(self, repo: Repository, web_client: WebClient) -> None:
+    def __init__(
+        self, repo: Repository, web_client: WebClient, availability: SourceAvailability | None = None
+    ) -> None:
         self._repo = repo
         self._web = web_client
+        self._availability = availability
         self._running = False
         self._stop_signal = asyncio.Event()
         self._locks: dict[int, asyncio.Lock] = {}
@@ -69,6 +73,9 @@ class FeedService:
 
     def set_web_client(self, web_client: WebClient) -> None:
         self._web = web_client
+
+    def set_availability(self, availability: SourceAvailability | None) -> None:
+        self._availability = availability
 
     async def _feed_lock(self, feed_id: int) -> asyncio.Lock:
         async with self._locks_guard:
@@ -222,13 +229,16 @@ class FeedService:
         enqueued_numbers: set[str] = set()
         enqueued = 0
         if feed.auto_enqueue:
+            disabled = (
+                await self._availability.disabled_sources() if self._availability is not None else frozenset()
+            )
             for _entry, number in new_entries:
                 if number is None or number in enqueued_numbers or _entry.item_key in ignored_keys:
                     continue
                 enqueued_numbers.add(number)
                 await self._repo.create_task(
                     task_type=TaskType.SCRAPE,
-                    payload=build_feed_scrape_payload(feed, number),
+                    payload=build_feed_scrape_payload(feed, number, disabled_sources=disabled),
                     priority=_SCRAPE_PRIORITY,
                 )
                 enqueued += 1

@@ -46,6 +46,8 @@ class SiteOutcomeKind(StrEnum):
     OK = "ok"
     FAILED = "failed"
     CACHE_HIT = "cache_hit"
+    SKIPPED = "skipped"
+    """批次级探测判定不可用, 建图时直接跳过 (不触网、不计失败)."""
 
 
 class SiteOutcomeRecord(BaseModel):

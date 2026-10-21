@@ -121,3 +121,15 @@ async def test_network_check(client: HttpxClient, app: FastAPI, monkeypatch: pyt
         assert resp.status_code == 200
         (item,) = resp.json()["items"]
         assert (item["status"], item["reason"], item["http_status"]) == ("failed", reason, http_status)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_network_check_exposes_circuit_breakers(
+    client: HttpxClient, app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """响应带熔断器快照 (proxy:/host: 状态), 诊断全站批量失败的根因."""
+    _stub_transport(app, monkeypatch, _ok)
+    resp = await client.post("network/check", json={})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert isinstance(body["circuit_breakers"], dict)

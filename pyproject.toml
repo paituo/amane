@@ -32,12 +32,16 @@ dependencies = [
     "feedparser>=6.0.14",
     "packaging>=26.3",
     "python-multipart>=0.0.32",
+    "sqlite-vec>=0.1.9",
 ]
 
 [project.optional-dependencies]
 browser = [
     "camoufox>=0.5.6",
     "patchright>=1.59.1",
+]
+vector = [
+    "fastembed>=0.9.0",
 ]
 
 [dependency-groups]
