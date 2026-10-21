@@ -89,9 +89,10 @@
   },
   "ingest": {
     "label": "文件发现方式",
-    "hint": "Webhook 需 CloudDrive2 会员, 性能好于监听挂载路径",
+    "hint": "Webhook 需 CloudDrive2 会员, 性能好于监听挂载路径; Everything 按索引周期枚举, 不监听文件系统",
     "native": "本地文件",
     "clouddrive": "CD2 webhook",
+    "everything": "Everything",
     "cloudPath": "CloudDrive 路径",
     "cloudPathHint": "库路径对应的 CloudDrive2 内的路径"
   },

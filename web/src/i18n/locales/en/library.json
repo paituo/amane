@@ -91,9 +91,10 @@
   },
   "ingest": {
     "label": "File discovery",
-    "hint": "Webhook requires a CloudDrive2 membership; performs better than watching the mount path",
+    "hint": "Webhook requires a CloudDrive2 membership; performs better than watching the mount path. Everything polls its index instead of watching the filesystem",
     "native": "Local files",
     "clouddrive": "CD2 webhook",
+    "everything": "Everything",
     "cloudPath": "CloudDrive path",
     "cloudPathHint": "Path of this library inside CloudDrive2"
   },

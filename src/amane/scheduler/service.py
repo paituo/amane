@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import os
-from collections.abc import Coroutine, Sequence
+from collections.abc import Collection, Coroutine, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -122,6 +122,7 @@ class WatcherService:
             blacklist_patterns=lib.blacklist_patterns,
             min_file_size=lib.min_file_size,
             media_extensions=frozenset(self._media_extensions) if self._media_extensions else None,
+            subtitle_extensions=lib.subtitle_extensions,
         )
 
     def _register_cloud(self, lib: Library) -> None:
@@ -198,7 +199,7 @@ class WatcherService:
                 continue
             try:
                 # es.exe 是子进程, 分类含 stat; 两者都不能占用事件循环.
-                paths = await asyncio.to_thread(self._collect_everything, route)
+                paths, subtitle_dirs = await asyncio.to_thread(self._collect_everything, route)
             except EverythingUnavailable as exc:
                 logger.warning("everything source unavailable", library_id=route.library_id, error=str(exc))
                 continue
@@ -214,7 +215,7 @@ class WatcherService:
                 if str(path) in known:
                     continue
                 try:
-                    await self._on_file_found(path, route.library_id)
+                    await self._on_file_found(path, route.library_id, subtitle_dirs=subtitle_dirs)
                 except Exception:
                     # 单条失败 (典型是与其它通道竞态撞上路径 UNIQUE) 不打断整轮: 其余文件照常入库,
                     # 失败的这条下一轮重试时会被"已登记则跳过"收敛.
@@ -224,13 +225,24 @@ class WatcherService:
                     continue
                 known.add(str(path))
 
-    def _collect_everything(self, route: EverythingRoute) -> list[Path]:
-        hits = self._everything_client().search(
+    def _collect_everything(self, route: EverythingRoute) -> tuple[list[Path], set[str]]:
+        """一次取回媒体清单与「含字幕的目录」集合; 两者都只读 Everything 索引, 不触云盘."""
+        client = self._everything_client()
+        hits = client.search(
             route.root,
             route.scan.media_extensions,
             recursive=route.recursive,
         )
-        return [hit.path for hit in hits if route.scan.classify(hit.path) is LibraryFileKind.MEDIA]
+        paths = [hit.path for hit in hits if route.scan.classify(hit.path) is LibraryFileKind.MEDIA]
+        return paths, self._collect_subtitle_dirs(client, route)
+
+    def _collect_subtitle_dirs(self, client: EverythingClient, route: EverythingRoute) -> set[str]:
+        """字幕归属由索引一次性算出: 目录名归一后入集合, 命中即表示该目录有外挂字幕."""
+        extensions = route.scan.subtitle_extensions or ()
+        if not extensions:
+            return set()
+        hits = client.search(route.root, extensions, recursive=route.recursive)
+        return {os.path.normcase(str(hit.path.parent)) for hit in hits}
 
     def _log_observer_start_error(self, exc: OSError) -> None:
         if "inotify" in str(exc).lower() or "watch" in str(exc).lower():
@@ -582,7 +594,9 @@ class WatcherService:
         except RuntimeError:
             logger.warning("no event loop available")
 
-    async def _on_file_found(self, path: Path, library_id: int) -> None:
+    async def _on_file_found(
+        self, path: Path, library_id: int, *, subtitle_dirs: Collection[str] | None = None
+    ) -> None:
         path_str = str(path)
 
         existing = await self._repo.get_media_file_by_path(path_str)
@@ -591,7 +605,7 @@ class WatcherService:
             return
 
         library = await self._repo.get_library(library_id)
-        media = await register_media_file(self._repo, library_id, path, library=library)
+        media = await register_media_file(self._repo, library_id, path, library=library, subtitle_dirs=subtitle_dirs)
         assert media.id is not None
         logger.info("file discovered", path=path_str, media_file_id=media.id, library_id=library_id)
 

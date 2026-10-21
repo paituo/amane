@@ -8120,6 +8120,37 @@
         "title": "ErrorRow",
         "description": "回合异常; 文案直接进助手气泡."
       },
+      "EverythingConfig": {
+        "properties": {
+          "executable": {
+            "type": "string",
+            "title": "Executable",
+            "default": ""
+          },
+          "instance": {
+            "type": "string",
+            "title": "Instance",
+            "default": ""
+          },
+          "poll_interval": {
+            "type": "number",
+            "maximum": 86400.0,
+            "minimum": 5.0,
+            "title": "Poll Interval",
+            "default": 300.0
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "maximum": 600000.0,
+            "minimum": 500.0,
+            "title": "Timeout Ms",
+            "default": 5000
+          }
+        },
+        "type": "object",
+        "title": "EverythingConfig",
+        "description": "Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级."
+      },
       "FacetBatchAction": {
         "type": "string",
         "enum": [
@@ -9643,6 +9674,15 @@
               ]
             }
           },
+          "everything": {
+            "$ref": "#/components/schemas/EverythingConfig",
+            "default": {
+              "executable": "",
+              "instance": "",
+              "poll_interval": 300.0,
+              "timeout_ms": 5000
+            }
+          },
           "worker": {
             "$ref": "#/components/schemas/WorkerConfig",
             "default": {
@@ -10320,7 +10360,8 @@
         "type": "string",
         "enum": [
           "native",
-          "clouddrive"
+          "clouddrive",
+          "everything"
         ],
         "title": "LibraryIngest",
         "description": "媒体库文件发现通道. automation=none 时两边都不收事件."

@@ -7,6 +7,7 @@
     "network": "Network",
     "worker": "Task Engine",
     "watcher": "File Monitoring",
+    "everything": "Everything",
     "logging": "Logging",
     "sr": "Super Resolution",
     "llm": "LLM Translation",
@@ -544,6 +545,24 @@
       "media_extensions": {
         "label": "Media Extensions",
         "description": "Media file extensions to watch and scan, comma-separated"
+      }
+    },
+    "everything": {
+      "executable": {
+        "label": "es.exe Path",
+        "description": "Leave empty to auto-detect the usual install locations; Windows only"
+      },
+      "instance": {
+        "label": "Everything Instance",
+        "description": "Leave empty to use the default instance"
+      },
+      "poll_interval": {
+        "label": "Enumeration Interval",
+        "description": "How often to re-enumerate an Everything library from its index (seconds)"
+      },
+      "timeout_ms": {
+        "label": "Index Load Timeout",
+        "description": "How long to wait for the Everything index to become ready (ms); a timeout skips this round"
       }
     },
     "sr": {

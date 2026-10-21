@@ -1836,6 +1836,38 @@ export const ErrorRowSchema = {
     description: '回合异常; 文案直接进助手气泡.'
 } as const;
 
+export const EverythingConfigSchema = {
+    properties: {
+        executable: {
+            type: 'string',
+            title: 'Executable',
+            default: ''
+        },
+        instance: {
+            type: 'string',
+            title: 'Instance',
+            default: ''
+        },
+        poll_interval: {
+            type: 'number',
+            maximum: 86400,
+            minimum: 5,
+            title: 'Poll Interval',
+            default: 300
+        },
+        timeout_ms: {
+            type: 'integer',
+            maximum: 600000,
+            minimum: 500,
+            title: 'Timeout Ms',
+            default: 5000
+        }
+    },
+    type: 'object',
+    title: 'EverythingConfig',
+    description: 'Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级.'
+} as const;
+
 export const FacetBatchActionSchema = {
     type: 'string',
     enum: [
@@ -3388,6 +3420,15 @@ export const HotSettingsSchema = {
                 ]
             }
         },
+        everything: {
+            $ref: '#/components/schemas/EverythingConfig',
+            default: {
+                executable: '',
+                instance: '',
+                poll_interval: 300,
+                timeout_ms: 5000
+            }
+        },
         worker: {
             $ref: '#/components/schemas/WorkerConfig',
             default: {
@@ -4077,7 +4118,8 @@ export const LibraryIngestSchema = {
     type: 'string',
     enum: [
         'native',
-        'clouddrive'
+        'clouddrive',
+        'everything'
     ],
     title: 'LibraryIngest',
     description: '媒体库文件发现通道. automation=none 时两边都不收事件.'

@@ -7,6 +7,7 @@
     "network": "网络",
     "worker": "任务引擎",
     "watcher": "文件监控",
+    "everything": "Everything",
     "logging": "日志",
     "sr": "图像超分",
     "llm": "LLM 翻译",
@@ -544,6 +545,24 @@
       "media_extensions": {
         "label": "媒体扩展名",
         "description": "监控和扫描的媒体文件扩展名列表, 逗号分隔"
+      }
+    },
+    "everything": {
+      "executable": {
+        "label": "es.exe 路径",
+        "description": "留空按常见安装位置自动探测; 仅 Windows 生效"
+      },
+      "instance": {
+        "label": "Everything 实例名",
+        "description": "留空使用默认实例"
+      },
+      "poll_interval": {
+        "label": "枚举间隔",
+        "description": "按索引重新枚举 Everything 库的间隔 (秒)"
+      },
+      "timeout_ms": {
+        "label": "索引加载超时",
+        "description": "等待 Everything 索引就绪的超时 (毫秒), 超时按来源不可用跳过本轮"
       }
     },
     "sr": {

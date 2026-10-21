@@ -1084,6 +1084,30 @@ export type ErrorRow = {
 };
 
 /**
+ * EverythingConfig
+ *
+ * Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级.
+ */
+export type EverythingConfig = {
+    /**
+     * Executable
+     */
+    executable?: string;
+    /**
+     * Instance
+     */
+    instance?: string;
+    /**
+     * Poll Interval
+     */
+    poll_interval?: number;
+    /**
+     * Timeout Ms
+     */
+    timeout_ms?: number;
+};
+
+/**
  * FacetBatchAction
  *
  * 分类批量动作; 两个动作都是整体赋值且幂等.
@@ -1683,6 +1707,7 @@ export type HotSettings = {
     llm?: LlmConfig;
     r18?: R18Config;
     watcher?: WatcherConfig;
+    everything?: EverythingConfig;
     worker?: WorkerConfig;
     logging?: LoggingConfig;
     /**
@@ -2052,7 +2077,7 @@ export type LibraryCreateRequest = {
  *
  * 媒体库文件发现通道. automation=none 时两边都不收事件.
  */
-export type LibraryIngest = 'native' | 'clouddrive';
+export type LibraryIngest = 'native' | 'clouddrive' | 'everything';
 
 /**
  * LibraryListResponse
