@@ -6,9 +6,11 @@ from collections import Counter
 from typing import Any
 
 import pytest
+from curl_cffi import CurlError
 
 from amane.app.runtime import build_network_stack
 from amane.config import HotSettings, SiteConfig
+from amane.net.connectivity_breaker import BreakerState, ConnectivityBreaker
 from amane.net.errors import FailureKind, FailureReason, RequestError, RequestFailure
 from amane.net.http import (
     _IMPERSONATE_OPTIONS,
@@ -484,3 +486,117 @@ class TestChunkedDownload:
         attempts = Counter(session.ranges)
         assert attempts[(_CHUNK, 2 * _CHUNK - 1)] == 3
         assert set(attempts.values()) == {1, 3}
+
+
+class _RaisingStubSession:
+    """按调用次序抛出给定异常 (用尽后重复最后一个), 记录出站调用."""
+
+    def __init__(self, *exceptions: BaseException) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._exceptions = list(exceptions) or [CurlError("boom")]
+
+    async def request(self, method: str, url: str, **kwargs: Any) -> _StubResponse:
+        self.calls.append({"method": method, "url": url, **kwargs})
+        index = min(len(self.calls) - 1, len(self._exceptions) - 1)
+        raise self._exceptions[index]
+
+
+def _client_with_breaker(breaker: ConnectivityBreaker, **kwargs: Any) -> WebClient:
+    return WebClient(limiters=RateLimiters(default_rate=100), connectivity=breaker, **kwargs)
+
+
+class TestCircuitBreaker:
+    """连接健康熔断接入 request(): 开路短路、失败记录、成功复位、bypass_circuit."""
+
+    @pytest.mark.asyncio
+    async def test_open_circuit_short_circuits_without_network(self, monkeypatch: pytest.MonkeyPatch):
+        """熔断开路时 request 抛 CIRCUIT_OPEN 且不触网 (session 调用 0 次)."""
+        breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
+        proxy_key = "proxy:http://127.0.0.1:7890"
+        await breaker.record_failure(proxy_key)
+        await breaker.record_failure(proxy_key)
+        assert breaker.is_open(proxy_key) is True
+
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _StubSession()
+        monkeypatch.setattr(client, "_session", session)
+
+        with pytest.raises(RequestError) as exc:
+            await client.request("GET", "https://www.dmm.co.jp/x")
+        assert exc.value.reason == FailureReason.CIRCUIT_OPEN
+        assert session.calls == []  # 未触网
+
+    @pytest.mark.asyncio
+    async def test_closed_circuit_proceeds_normally(self, monkeypatch: pytest.MonkeyPatch):
+        breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _StubSession(_StubResponse(status=200))
+        monkeypatch.setattr(client, "_session", session)
+
+        resp = await client.request("GET", "https://www.dmm.co.jp/x")
+        assert resp.status_code == 200
+        assert len(session.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_curl_error_is_fail_fast_and_records_failure(self, monkeypatch: pytest.MonkeyPatch):
+        """连接错误立即 fail-fast (不重试), 且记失败 → 跨请求开路."""
+        breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _RaisingStubSession(CurlError("connect refused"))
+        monkeypatch.setattr(client, "_session", session)
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+        for _ in range(2):
+            with pytest.raises(RequestError):
+                await client.request("GET", "https://www.dmm.co.jp/x")
+
+        # 每个请求仅发 1 次 (无重试), 共 2 次; 随后代理键开路.
+        assert len(session.calls) == 2
+        assert breaker.is_open("proxy:http://127.0.0.1:7890") is True
+        assert breaker.is_open("host:www.dmm.co.jp") is False  # host 阈值更高, 未开路
+
+    @pytest.mark.asyncio
+    async def test_success_records_and_resets_open_breaker(self, monkeypatch: pytest.MonkeyPatch):
+        """探针 (bypass_circuit) 成功后复位已开路的熔断."""
+        breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
+        proxy_key = "proxy:http://127.0.0.1:7890"
+        await breaker.record_failure(proxy_key)
+        await breaker.record_failure(proxy_key)
+        assert breaker.is_open(proxy_key) is True
+
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _StubSession(_StubResponse(status=200))
+        monkeypatch.setattr(client, "_session", session)
+
+        # 诊断类探测走 bypass_circuit, 真实触网
+        resp = await client.request("GET", "https://www.dmm.co.jp/x", bypass_circuit=True)
+        assert resp.status_code == 200
+        assert breaker.state(proxy_key) is BreakerState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_bypass_circuit_ignores_open_state(self, monkeypatch: pytest.MonkeyPatch):
+        breaker = ConnectivityBreaker(proxy_fail_max=2, host_fail_max=5)
+        proxy_key = "proxy:http://127.0.0.1:7890"
+        await breaker.record_failure(proxy_key)
+        await breaker.record_failure(proxy_key)
+        assert breaker.is_open(proxy_key) is True
+
+        client = _client_with_breaker(breaker, proxy="http://127.0.0.1:7890")
+        session = _StubSession(_StubResponse(status=404))
+        monkeypatch.setattr(client, "_session", session)
+        monkeypatch.setattr(asyncio, "sleep", _no_sleep)
+
+        # bypass 时即便开路也照常发请求 (404 不可重试 → 仅发 1 次, 隔离 bypass 行为)
+        with pytest.raises(RequestError):
+            await client.request("GET", "https://www.dmm.co.jp/x", bypass_circuit=True)
+        assert len(session.calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_breaker_is_noop(self, monkeypatch: pytest.MonkeyPatch):
+        """未注入熔断时行为与改造前一致."""
+        client = WebClient(limiters=RateLimiters(default_rate=100), proxy="http://127.0.0.1:7890")
+        session = _StubSession(_StubResponse(status=200))
+        monkeypatch.setattr(client, "_session", session)
+        resp = await client.request("GET", "https://www.dmm.co.jp/x")
+        assert resp.status_code == 200
+        assert len(session.calls) == 1

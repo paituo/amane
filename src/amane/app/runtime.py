@@ -36,11 +36,15 @@ from ..llm import TranslationCache, build_translator
 from ..llm.guest_token import DEVICE_ID_FILENAME
 from ..media.watermarks import user_watermark_dir
 from ..net.browser import BrowserPool
+from ..net.connectivity_breaker import ConnectivityBreaker
 from ..net.http import RateLimiters, WebClient, site_proxy_overrides
+from ..net.proxy_pool import ProxyPool
+from ..net.response_cache import ResponseCache
 from ..playback import PlaybackFactory, PlaybackState
 from ..plugins.manager import PluginManager
 from ..plugins.packaging import install_plugin_path, install_plugin_zip, uninstall_plugin_tree
 from ..scheduler.worker import MAIN_LOOP_STOP_TIMEOUT, AsyncWorker
+from ..scrape_availability import SourceAvailability
 from ..search import (
     EmbeddingProvider,
     FastEmbedProvider,
@@ -77,6 +81,8 @@ class NetworkStack:
     http_client: HttpClient
     factory: CrawlerFactory
     browser: BrowserPool
+    availability: SourceAvailability
+    """批次级来源可用性缓存 (TTL), 供 REFRESH / RESCRAPE / Feed 扇出时一次性判定死站."""
 
 
 def build_network_stack(
@@ -130,7 +136,15 @@ def build_network_stack(
         site_urls,
         source_rates=plugin_rates,
         default_rate=hot.network.default_rate_limit,
+        adaptive=hot.network.adaptive_rate_limit,
+        floor_ratio=hot.network.adaptive_rate_floor_ratio,
     )
+    # P2-⑦ 多代理池: 仅在 network.proxies 非空时启用; 池与熔断器共享 proxy:<url> 键,
+    # 开路代理不被选中, 冷却后半开探针自动回池. 未配置池时行为与改造前完全一致.
+    breaker = ConnectivityBreaker()
+    proxy_pool = ProxyPool(hot.network.proxies, breaker) if hot.network.proxies else None
+    if proxy_pool is not None:
+        logger.info("proxy_pool.enabled", proxies=list(hot.network.proxies))
     web_client = WebClient(
         proxy=hot.network.proxy,
         proxy_overrides=site_proxy_overrides(hot.scraping.site_config, site_urls),
@@ -142,6 +156,9 @@ def build_network_stack(
         chunked_threshold=hot.network.chunked_threshold,
         chunk_size=hot.network.chunk_size,
         download_concurrency=hot.network.concurrency,
+        connectivity=breaker,
+        response_cache=ResponseCache(hot.network.response_cache_ttl_s, hot.network.response_cache_max_entries),
+        proxy_pool=proxy_pool,
     )
     if browser is None:
         browser = BrowserPool(
@@ -165,7 +182,16 @@ def build_network_stack(
         plugin_configs=hot.plugins,
     )
 
-    return NetworkStack(web_client=web_client, http_client=http_client, factory=factory, browser=browser)
+    # 批次级来源可用性缓存: 用当前网络栈探测, 结论与运行时配置一致.
+    availability = SourceAvailability(factory, hot, plugin_manager)
+
+    return NetworkStack(
+        web_client=web_client,
+        http_client=http_client,
+        factory=factory,
+        browser=browser,
+        availability=availability,
+    )
 
 
 def _warn_disabled_browser_sources(hot: HotSettings, browser: BrowserPool) -> None:
@@ -431,6 +457,7 @@ class AppRuntime:
         self.browser = stack.browser
         if self.feed_service is not None:
             self.feed_service.set_web_client(self.web_client)
+            self.feed_service.set_availability(stack.availability)
 
         # 使用新处理器与并发数重建 worker
         self.worker = AsyncWorker(
@@ -447,6 +474,7 @@ class AppRuntime:
                 self.plugin_manager,
                 library_locks=self.library_locks,
                 inventory_store=self.inventory_store,
+                availability=stack.availability,
             ),
             concurrency=hot.worker.concurrency,
             poll_interval=hot.worker.poll_interval,
@@ -704,6 +732,7 @@ def build_handlers(
     plugin_manager: PluginManager | None = None,
     library_locks: LibraryTaskLocks | None = None,
     inventory_store: InventoryStore | None = None,
+    availability: SourceAvailability | None = None,
 ) -> dict[TaskType, TaskHandler[Any, Any]]:
     # 未启用、或密钥模式下缺密钥时 translator 为 None, ScrapeHandler 跳过翻译.
     # 经 _rebuild() 热重载; 代理沿用 network.proxy.
@@ -729,7 +758,7 @@ def build_handlers(
     if inventory_store is None:
         inventory_store = InventoryStore()
     handlers: dict[TaskType, TaskHandler[Any, Any]] = {
-        TaskType.REFRESH: RefreshHandler(repo, hot.watcher.media_extensions, inventory_store),
+        TaskType.REFRESH: RefreshHandler(repo, hot.watcher.media_extensions, inventory_store, availability),
         TaskType.SCRAPE: ScrapeHandler(
             repo,
             factory,
@@ -753,7 +782,7 @@ def build_handlers(
         TaskType.DELETE: DeleteHandler(repo, inventory_store, hot, library_locks=library_locks),
         TaskType.CLEANUP: CleanupHandler(repo=repo, resource_store=resource_store),
         TaskType.UPSCALE: UpscaleHandler(resource_store, hot),
-        TaskType.RESCRAPE: RescrapeHandler(repo),
+        TaskType.RESCRAPE: RescrapeHandler(repo, availability),
     }
     # state_dir 缺省回退 cwd/data (精简构造场景).
     handlers[TaskType.R18_IMPORT] = R18ImportHandler(

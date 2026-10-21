@@ -573,6 +573,26 @@ class NetworkConfig(BaseModel):
     default_rate_limit: float = Field(default=5, ge=0.1, le=100)
     """优先级低于 network.rate_limits 与站点配置."""
 
+    response_cache_ttl_s: float = Field(default=300.0, ge=0.0, le=86_400.0, json_schema_extra={"x-hidden": True})
+    """跨任务 HTTP 响应缓存 TTL (秒); ``0`` 关闭. 只缓存小的文本类 GET 2xx 响应 (搜索/详情页), 跨番号复用.
+    短 TTL 约束站点 schema 变更的可见延迟; 强制刷新可经 ``WebClient.request(bypass_cache=True)`` 绕过."""
+
+    response_cache_max_entries: int = Field(default=256, ge=0, le=5000, json_schema_extra={"x-hidden": True})
+    """响应缓存 LRU 条目上限; ``0`` 关闭."""
+
+    adaptive_rate_limit: bool = Field(default=True, json_schema_extra={"x-hidden": True})
+    """P2-⑥ 自适应限速总开关; ``False`` 时恢复固定配置速率 (改造前的严格平滑桶)."""
+
+    adaptive_rate_floor_ratio: float = Field(default=0.25, ge=0.05, le=1.0, json_schema_extra={"x-hidden": True})
+    """自适应减速下限 = 该 host 配置速率 × 此比值. 自适应只在该下限与配置速率之间浮动:
+    永远不会超过配置速率 (配置即礼貌上限), 也永远不会慢于此下限."""
+
+    proxies: list[str] = Field(default_factory=list, json_schema_extra={"x-hidden": True})
+    """P2-⑦ 多代理池 (有序, 非空即启用). 启用后, 未配置站点级代理的 host 从池内按健康态
+    轮选 (被熔断开路的不选, 冷却后自动回池); 站点级代理覆盖仍优先于池.
+    池是唯一代理来源: 全部开路时请求快速失败 (``CIRCUIT_OPEN``), 不静默回退 ``network.proxy``.
+    连接级失败自动换池内下一个健康代理 (不占重试预算). 空列表 = 不启用, 行为与改造前一致."""
+
 
 class WorkerConfig(BaseModel):
     concurrency: int = Field(default=10, ge=1, le=64)

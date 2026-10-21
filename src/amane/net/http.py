@@ -6,6 +6,7 @@
 import asyncio
 import random
 import time
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 import aiofiles
@@ -15,8 +16,11 @@ from aiolimiter import AsyncLimiter
 from curl_cffi import CurlError
 from curl_cffi.requests import AsyncSession, BrowserTypeLiteral, Response
 
-from .errors import FailureKind, RequestError, RequestFailure
+from .connectivity_breaker import ConnectivityBreaker
+from .errors import FailureKind, FailureReason, RequestError, RequestFailure
+from .proxy_pool import ProxyPool
 from .recording import get_bound_http_recorder, skip_body_recording
+from .response_cache import CachedResponse, ResponseCache
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -39,7 +43,7 @@ _IMPERSONATE_OPTIONS: tuple[BrowserTypeLiteral, ...] = (
 )
 """进程内可用的指纹; 轮换按此顺序取下一个."""
 
-_RETRYABLE_STATUS_CODES = frozenset({408, 429, 503, 504})
+_RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
 
 _IMPERSONATE_REJECTED_STATUSES = frozenset({403, 406})
 """判定「站点拦下此指纹」的状态码: 站点按 TLS 指纹放行时给出的典型响应;
@@ -47,6 +51,62 @@ _IMPERSONATE_REJECTED_STATUSES = frozenset({403, 406})
 
 _MAX_IMPERSONATE_ROTATIONS = 3
 """单次请求最多轮换的指纹数. 与重试预算分开计, 因此被拦时单次调用最多发出 4 次请求."""
+
+_RESPONSE_CACHE_MAX_BODY = 2 * 1024**2
+"""单条响应缓存正文上限 (字节); 超过不缓存, 图片/视频等大响应天然排除."""
+
+_CACHABLE_CONTENT_TYPES = ("text/", "application/json", "application/xml", "application/xhtml")
+"""只缓存文本类内容 (html/json/xml/纯文本) 的 2xx 响应."""
+
+_ADAPT_INTERVAL_S = 1.0
+"""同一 host 两次调速的最小间隔 (秒); 429 是站点显式限流信号, 不受此约束."""
+
+_ADAPT_FAST_LATENCY_S = 0.5
+"""低于此延迟视为快响应, 累计到 ``_ADAPT_FAST_STREAK`` 次后向配置速率恢复一步."""
+
+_ADAPT_SLOW_LATENCY_S = 3.0
+"""高于此延迟视为慢响应, 减速一步."""
+
+_ADAPT_FAST_STREAK = 5
+"""恢复所需的连续快响应次数 (防单次幸运命中就把速率拉满)."""
+
+_ADAPT_BACKOFF_429 = 0.5
+_ADAPT_BACKOFF_STRESS = 0.85
+_ADAPT_BACKOFF_SLOW = 0.9
+_ADAPT_RECOVER_STEP = 1.15
+_ADAPT_RECOVER_BONUS = 0.05
+_ADAPT_MIN_RATE = 0.05
+"""绝对速率下限 (次/秒), 防极低配置速率被乘出病理性的请求间隔."""
+
+_ADAPT_BACKOFF_STATUSES = frozenset({408, 500, 502, 503, 504})
+"""服务端应激状态: 温和减速. 即 ``_RETRYABLE_STATUS_CODES`` 去掉单独走立即减半的 429."""
+
+
+def _response_cache_key(
+    method: str,
+    url: str,
+    proxy: str | None,
+    fingerprint: str | None,
+    headers: dict[str, str] | None,
+    data: Any | None,
+    json: Any | None,
+) -> tuple | None:
+    """可缓存的请求才产出 key; 非 GET / 带请求体 / 带 ``Range`` (分片下载) 一律不缓存.
+
+    键含 method+url+代理+指纹+请求头: 请求头影响响应内容 (站点按 Referer/UA 放行), 必须进键,
+    否则会把 A 头的响应错发给 B 请求. 指纹与请求头在同一 host 上稳定, 因此跨番号仍能命中.
+    """
+    if method != "GET" or data is not None or json is not None:
+        return None
+    if headers and any(k.lower() == "range" for k in headers):
+        return None
+    return (
+        "GET",
+        url,
+        proxy or "",
+        fingerprint or "",
+        tuple(sorted((k.lower(), v) for k, v in (headers or {}).items())),
+    )
 
 
 class _FingerprintPicker:
@@ -79,17 +139,140 @@ class _FingerprintPicker:
         return None
 
 
+class _AdaptiveLimiter:
+    """单 host 的自适应平滑限流器 (P2-⑥, 类 Scrapy AutoThrottle).
+
+    契约 (改造前后都不变的部分): 桶容量 1 的**严格平滑**限速, 不允许突发 ——
+    突发会触发反爬检测 (见 ``docs/dev/crawlers.md``). 速率切换时替换内层桶, 容量仍为 1.
+
+    自适应边界: 速率只在 ``[floor_rate, max_rate]`` 内浮动. ``max_rate`` 即该 host 的
+    **配置速率**, 是运营者设定的礼貌上限, **永不超过**; ``floor_rate`` 为减速下限,
+    保证再悲观也不会把站点限成"几乎不可用".
+
+    观测信号 (每次 ``WebClient.request()`` 结局上报一次):
+    - ``429``: 站点显式限流 → 立即减半, 不受适应间隔约束 (再慢一步就可能被封).
+    - ``5xx/408`` 或连接级错误 (``status is None``): 服务端应激 → 每个适应间隔减速 15%.
+    - 慢响应 (>= ``_ADAPT_SLOW_LATENCY_S``): 减速 10%.
+    - 连续 ``_ADAPT_FAST_STREAK`` 次快响应 (<= ``_ADAPT_FAST_LATENCY_S``): 向配置速率恢复一步.
+    - 其它状态 (404/403/406/3xx...): 不调速.
+    """
+
+    __slots__ = (
+        "_adaptive",
+        "_clock",
+        "_fast_streak",
+        "_floor_rate",
+        "_last_adapt_at",
+        "_limiter",
+        "_lock",
+        "_max_rate",
+        "_rate",
+    )
+
+    def __init__(
+        self,
+        rate: float,
+        *,
+        adaptive: bool = True,
+        floor_ratio: float = 0.25,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._max_rate = rate
+        self._floor_rate = max(rate * floor_ratio, _ADAPT_MIN_RATE)
+        self._rate = rate
+        self._adaptive = adaptive
+        self._clock = clock
+        self._limiter = AsyncLimiter(1, 1 / rate)
+        self._lock = asyncio.Lock()
+        self._last_adapt_at: float | None = None
+        self._fast_streak = 0
+
+    @property
+    def time_period(self) -> float:
+        """当前请求间隔 (秒); 兼容改造前对 ``AsyncLimiter.time_period`` 的既有断言."""
+        return self._limiter.time_period
+
+    @property
+    def rate(self) -> float:
+        """当前速率 (次/秒), 介于 ``floor_rate`` 与配置速率之间."""
+        return self._rate
+
+    @property
+    def floor_rate(self) -> float:
+        """减速下限 (次/秒)."""
+        return self._floor_rate
+
+    async def acquire(self) -> None:
+        await self._limiter.acquire()
+
+    async def observe(self, latency_s: float | None, status: int | None) -> None:
+        """上报一次请求结局 (最终状态码 + 总耗时), 驱动本 host 调速.
+
+        ``latency_s`` 为 ``None`` 时只按状态决策 (429 分支不依赖延迟);
+        ``status`` 为 ``None`` 表示连接级失败 (代理拒连 / 超时).
+        """
+        if not self._adaptive:
+            return
+        async with self._lock:
+            now = self._clock()
+            if status == 429:
+                # 站点显式限流: 立即减半, 不受适应间隔约束.
+                self._last_adapt_at = now
+                self._fast_streak = 0
+                self._apply(max(self._floor_rate, self._rate * _ADAPT_BACKOFF_429))
+                return
+            if self._last_adapt_at is not None and now - self._last_adapt_at < _ADAPT_INTERVAL_S:
+                return
+            if status is None or status in _ADAPT_BACKOFF_STATUSES:
+                # 连接错误/超时或服务端应激: 温和减速 (连接级失败另有熔断兜底, 这里只补礼貌).
+                self._fast_streak = 0
+                self._apply(max(self._floor_rate, self._rate * _ADAPT_BACKOFF_STRESS))
+            elif status < 400 and latency_s is not None:
+                if latency_s <= _ADAPT_FAST_LATENCY_S:
+                    self._fast_streak += 1
+                    if self._fast_streak >= _ADAPT_FAST_STREAK:
+                        self._fast_streak = 0
+                        self._apply(min(self._max_rate, self._rate * _ADAPT_RECOVER_STEP + _ADAPT_RECOVER_BONUS))
+                else:
+                    self._fast_streak = 0
+                    if latency_s >= _ADAPT_SLOW_LATENCY_S:
+                        self._apply(max(self._floor_rate, self._rate * _ADAPT_BACKOFF_SLOW))
+            self._last_adapt_at = now
+
+    def _apply(self, rate: float) -> None:
+        """钳制到 ``[floor, max]`` 后替换内层桶; 无变化时不动 (避免无意义的对象 churn)."""
+        rate = min(max(rate, self._floor_rate), self._max_rate)
+        if rate == self._rate:
+            return
+        self._rate = rate
+        self._limiter = AsyncLimiter(1, 1 / rate)
+
+
 class RateLimiters:
-    """严格平滑限流: ``AsyncLimiter(1, 1/rate)``, 桶容量 1, 完全无突发."""
+    """按 host 的自适应平滑限速 (P2-⑥).
+
+    每个 host 一个 ``_AdaptiveLimiter``: 配置速率是礼貌上限, 观测延迟/状态在
+    ``[floor, 配置]`` 内浮动. ``adaptive=False`` 时退化为改造前的固定速率严格平滑桶.
+
+    与熔断 (P0-①) 的分工: 熔断管"连不上就短路", 本类管"连得上但别太吵".
+    """
 
     _BUILTIN_HOSTS = frozenset({"127.0.0.1", "localhost"})
     _LOCALHOST_RATE = 300.0
 
-    def __init__(self, default_rate: float = 5):
+    def __init__(
+        self,
+        default_rate: float = 5,
+        *,
+        adaptive: bool = True,
+        floor_ratio: float = 0.25,
+    ):
         self._default_rate = default_rate
-        self._limiters: dict[str, AsyncLimiter] = {
-            "127.0.0.1": _make_limiter(self._LOCALHOST_RATE),
-            "localhost": _make_limiter(self._LOCALHOST_RATE),
+        self._adaptive = adaptive
+        self._floor_ratio = floor_ratio
+        self._limiters: dict[str, _AdaptiveLimiter] = {
+            "127.0.0.1": _make_limiter(self._LOCALHOST_RATE, adaptive=adaptive, floor_ratio=floor_ratio),
+            "localhost": _make_limiter(self._LOCALHOST_RATE, adaptive=adaptive, floor_ratio=floor_ratio),
         }
 
     @classmethod
@@ -101,9 +284,11 @@ class RateLimiters:
         *,
         source_rates: Mapping[str, float | None] | None = None,
         default_rate: float = 5,
+        adaptive: bool = True,
+        floor_ratio: float = 0.25,
     ) -> RateLimiters:
         """优先级: 全局 network.rate_limits > site_config.rate_limit > 默认."""
-        instance = cls(default_rate=default_rate)
+        instance = cls(default_rate=default_rate, adaptive=adaptive, floor_ratio=floor_ratio)
 
         # site_config.rate_limit (低优先级)
         for site_name, cfg in site_configs.items():
@@ -115,7 +300,9 @@ class RateLimiters:
             for url in base_urls:
                 host = httpx.URL(url).host
                 if host:
-                    instance._limiters[host] = _make_limiter(cfg.rate_limit)
+                    instance._limiters[host] = _make_limiter(
+                        cfg.rate_limit, adaptive=adaptive, floor_ratio=floor_ratio
+                    )
 
         # Plugin descriptors can provide a source-level default without being
         # forced into the core SiteConfig model.
@@ -125,30 +312,41 @@ class RateLimiters:
             for url in site_urls.get(str(source_name), []):
                 host = httpx.URL(url).host
                 if host and host not in instance._limiters:
-                    instance._limiters[host] = _make_limiter(rate)
+                    instance._limiters[host] = _make_limiter(rate, adaptive=adaptive, floor_ratio=floor_ratio)
 
         # network.rate_limits (高优先级, 覆盖上一层)
         for host, rate in network_rate_limits.items():
-            instance._limiters[host] = _make_limiter(rate)
+            instance._limiters[host] = _make_limiter(rate, adaptive=adaptive, floor_ratio=floor_ratio)
 
         configured = len(instance._limiters) - len(cls._BUILTIN_HOSTS)
         if configured:
-            logger.info("rate_limiters.created", configured_hosts=configured)
+            logger.info("rate_limiters.created", configured_hosts=configured, adaptive=adaptive)
 
         return instance
 
-    def get(self, host: str, *, rate: float | None = None) -> AsyncLimiter:
+    def get(self, host: str, *, rate: float | None = None) -> _AdaptiveLimiter:
         if host not in self._limiters:
-            self._limiters[host] = _make_limiter(rate or self._default_rate)
+            self._limiters[host] = _make_limiter(
+                rate or self._default_rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio
+            )
         return self._limiters[host]
 
     def set_rate(self, host: str, rate: float) -> None:
-        self._limiters[host] = _make_limiter(rate)
+        """配置变更 (热重载): 换全新限流器, 自适应状态一并复位到新配置速率."""
+        self._limiters[host] = _make_limiter(rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio)
+
+    async def observe(self, host: str | None, latency_s: float | None, status: int | None) -> None:
+        """上报一次 ``WebClient.request()`` 结局; ``host=None`` / 未预创建 / 关闭自适应均为无操作."""
+        if host is None:
+            return
+        limiter = self._limiters.get(host)
+        if limiter is not None:
+            await limiter.observe(latency_s, status)
 
 
-def _make_limiter(rate: float) -> AsyncLimiter:
-    """``AsyncLimiter(1, 1/rate)``: 桶容量 1, 无突发."""
-    return AsyncLimiter(1, 1 / rate)
+def _make_limiter(rate: float, *, adaptive: bool = True, floor_ratio: float = 0.25) -> _AdaptiveLimiter:
+    """容量 1 的平滑限流器; ``adaptive`` 开启时速率在 ``[rate*floor_ratio, rate]`` 内随观测浮动."""
+    return _AdaptiveLimiter(rate, adaptive=adaptive, floor_ratio=floor_ratio)
 
 
 def site_proxy_overrides(
@@ -200,7 +398,7 @@ def _with_same_origin_referer(
 
 
 class WebClient:
-    """出站 HTTP 通道. 代理按 host 解析 (站点级覆盖全局), 指纹按 host 选用, 被拦后换下一个."""
+    """出站 HTTP 通道. 代理按 host 解析 (站点级覆盖全局, 或全局走多代理池), 指纹按 host 选用, 被拦后换下一个."""
 
     def __init__(
         self,
@@ -215,6 +413,9 @@ class WebClient:
         chunked_threshold: int = 2 * 1024**2,
         chunk_size: int = 1 * 1024**2,
         download_concurrency: int = 10,
+        connectivity: ConnectivityBreaker | None = None,
+        response_cache: ResponseCache | None = None,
+        proxy_pool: ProxyPool | None = None,
     ):
         self._proxy = proxy
         self._proxy_overrides = dict(proxy_overrides or {})
@@ -225,6 +426,11 @@ class WebClient:
         self._chunked_threshold = chunked_threshold
         self._chunk_size = chunk_size
         self._download_concurrency = download_concurrency
+        self._connectivity = connectivity
+        self._response_cache = response_cache
+        # P2-⑦ 多代理池: 非空时 (network.proxies 已配置) 取代全局单值 proxy 的角色;
+        # 站点级代理覆盖仍优先于池. None = 未配置池, 行为与改造前完全一致.
+        self._proxy_pool = proxy_pool
         self._fingerprints = _FingerprintPicker(_IMPERSONATE_OPTIONS)
         self._session = AsyncSession(
             max_clients=max_clients,
@@ -240,11 +446,32 @@ class WebClient:
         """按 host 取得限速许可. 供不经 ``request`` 的通道 (浏览器渲染 / solver) 复用同一限速."""
         await self._limiters.get(httpx.URL(url).host).acquire()
 
-    def _proxy_for(self, host: str | None) -> str | None:
-        """该 host 实际使用的代理: 站点级设定优先, 含显式直连 (值为 ``None``)."""
+    def _proxy_for(self, host: str | None, *, exclude: frozenset[str] | None = None) -> str | None:
+        """该 host 实际使用的代理: 站点级设定优先, 含显式直连 (值为 ``None``).
+
+        多代理池 (P2-⑦): 配置了 ``network.proxies`` 且该 host 无站点级覆盖时, 从池内按
+        健康态轮选 (跳过被熔断开路的); ``exclude`` 供单次请求内的连接失败轮换排除已试过的.
+        池内全部开路/被排除时返回 ``None``, 由 ``request`` 短路 (不静默回退单值代理).
+        """
         if host in self._proxy_overrides:
             return self._proxy_overrides[host]
+        if self._proxy_pool is not None:
+            return self._proxy_pool.pick(exclude=exclude)
         return self._proxy
+
+    def _rotate_proxy(self, use_pool: bool, tried: set[str]) -> tuple[str, str] | None:
+        """连接级失败后从池内选下一个未试过的健康代理; 非池模式/无剩余代理返回 ``None``.
+
+        返回 ``(proxy, proxy_key)``; 与指纹轮换一样**不占重试预算** —— 死代理的连接 Attempt
+        已被熔断器计数, 换个代理重发是同一逻辑请求的延续, 不是新的重试.
+        """
+        if not use_pool or self._proxy_pool is None:
+            return None
+        nxt = self._proxy_pool.pick(exclude=frozenset(tried))
+        if nxt is None:
+            return None
+        tried.add(nxt)
+        return nxt, f"proxy:{nxt}"
 
     async def request(
         self,
@@ -260,6 +487,8 @@ class WebClient:
         allow_redirects: bool = True,
         ok_statuses: frozenset[int] | None = None,
         max_attempts: int | None = None,
+        bypass_circuit: bool = False,
+        bypass_cache: bool = False,
     ) -> Response:
         """``ok_statuses`` 额外视为成功 (例如 RSS 304), 不重试、不当失败. 重试用尽后抛 ``RequestError``.
 
@@ -268,20 +497,82 @@ class WebClient:
         配置 0 表示不重试而不是一次都不发.
 
         ``use_proxy=False`` 强制直连 (本机 solver 服务用), 否则按 host 应用站点级代理, 未配置时用全局
-        ``network.proxy``. 代理地址由 ``_proxy_for`` 决定, 同一 host 的连续请求走同一代理.
+        ``network.proxy``; 配置了多代理池 (``network.proxies``) 且该 host 无站点级覆盖时, 代理从池内
+        健康态轮选. 代理解析在进入重试循环前一次性完成 (缓存键/熔断键/首次尝试绑定同一个代理).
 
         403/406 另按「站点拦下此指纹」处理: 换下一个未试过的指纹重发, 换过的指纹对该 host 保持.
         轮换不占重试次数, 单次请求最多换 ``_MAX_IMPERSONATE_ROTATIONS`` 次; 该 host 的指纹全部被拒后
         不再轮换, 按原状态失败.
+
+        多代理池轮换 (P2-⑦): 连接级失败 (``CurlError``/``TimeoutError``) 且代理来自池时, 换池内下一个
+        未试过的健康代理重发, 同样不占重试预算; 池内全部试过/开路则按最终失败退出.
         """
         host = httpx.URL(url).host
         headers = _with_same_origin_referer(host, headers, self._same_origin_referer_hosts)
         await self._limiters.get(host).acquire()
 
         key = host or url
+        t0 = time.monotonic()
+
+        # 代理解析上移到循环外 (P2-⑦): 缓存键/熔断键/首次尝试必须绑定同一个代理;
+        # 循环内仅在连接级失败时轮换到池内下一个健康代理 (见 _rotate_proxy).
+        use_pool = use_proxy and self._proxy_pool is not None and host not in self._proxy_overrides
+        proxy = self._proxy_for(host) if use_proxy else None
+        tried_proxies: set[str] = {proxy} if proxy is not None else set()
+        proxy_key = f"proxy:{proxy}" if proxy else None
+
+        # 跨任务 HTTP 响应缓存 (P2-⑤): 命中即返回, 不触网、不进熔断统计 —— 因此熔断开路时也能用缓存兜底.
+        # 放在熔断检查之前是有意为之: 代理/host 开路不等于「没有可用数据」, 刚缓存的热页仍应服务.
+        # 诊断探测 (bypass_circuit) 与强制刷新 (bypass_cache) 一律不走缓存.
+        # 池模式下代理分量归一为空串: 池内代理是运营者声明等价的多出口, 按代理分会把缓存打散成
+        # N 份 (轮询导致同 URL  consecutive 请求交替 miss); 归一后任一代理取到的响应全池共享.
+        cache_key = None
+        if self._response_cache is not None and self._response_cache.enabled and not bypass_circuit and not bypass_cache:
+            cache_key = _response_cache_key(
+                method,
+                url,
+                "" if use_pool else proxy,
+                self._fingerprints.select(key),
+                headers,
+                data,
+                json,
+            )
+        if cache_key is not None:
+            cached = self._response_cache.get(cache_key)
+            if cached is not None:
+                self._record_exchange(method, url, resp=cached, error=None, t0=t0, attempts=1)
+                return cached
+
+        # 连接健康熔断: 代理或 host 已被连续失败判定为不可用 → 直接短路, 不再支付「重试 + 镜像 + 超时」预算.
+        # 诊断类一次性探测传 bypass_circuit=True, 永远反映真实状态, 不被自身开路阻断 (见 design doc 4.4).
+        host_key = f"host:{host}" if host else None
+        if use_pool and proxy is None:
+            # 池内代理全部被熔断开路: 与单代理开路同样短路, 不白付连接超时预算.
+            # 放在缓存查询之后: 与单代理语义一致 —— 开路不等于没有可用数据, 缓存热页仍服务.
+            raise RequestError(
+                url,
+                RequestFailure(
+                    kind=FailureKind.CURL,
+                    reason=FailureReason.CIRCUIT_OPEN,
+                    message="proxy pool exhausted: every proxy circuit open",
+                ),
+            )
+        if self._connectivity is not None and not bypass_circuit:
+            # 池模式下 proxy_key 不在此复查: pick 已做过健康判定并消耗掉半开探针名额,
+            # 这里再查一次 is_open 会把「冷却后放行的探针」误判为阻塞, 自动恢复就断了.
+            for ck in (host_key,) if use_pool else (proxy_key, host_key):
+                if ck is not None and self._connectivity.is_open(ck):
+                    raise RequestError(
+                        url,
+                        RequestFailure(
+                            kind=FailureKind.CURL,
+                            reason=FailureReason.CIRCUIT_OPEN,
+                            message=f"circuit open: {ck}",
+                        ),
+                    )
+
         total_attempts = 1 + self._max_retries
         attempts = max(1, total_attempts if max_attempts is None else min(max_attempts, total_attempts))
-        t0 = time.monotonic()
         failure: RequestFailure | None = None
         resp: Response | None = None
         sent = 0
@@ -300,7 +591,7 @@ class WebClient:
                     cookies=cookies,
                     data=data,
                     json=json,
-                    proxy=self._proxy_for(host) if use_proxy else None,
+                    proxy=proxy,
                     timeout=timeout or self._timeout,
                     allow_redirects=allow_redirects,
                     impersonate=impersonate,
@@ -311,7 +602,13 @@ class WebClient:
                     or resp.status_code in extra_ok
                     or (resp.status_code in (301, 302, 307, 308) and resp.headers.get("Location"))
                 ):
+                    # 只缓存 2xx 文本类 GET 响应; 下载/分片/错误响应不进缓存.
+                    if cache_key is not None and resp.status_code < 300:
+                        self._store_response(cache_key, url, resp)
                     self._record_exchange(method, url, resp=resp, error=None, t0=t0)
+                    await self._connectivity_success(host_key, proxy_key)
+                    # 自适应限速 (P2-⑥): 成功结局也上报, 驱动恢复/减速决策.
+                    await self._limiters.observe(host, time.monotonic() - t0, resp.status_code)
                     return resp
 
                 failure = RequestFailure(
@@ -324,10 +621,28 @@ class WebClient:
 
             except CurlError as e:
                 failure = RequestFailure(kind=FailureKind.CURL, message=f"curl error: {e}")
-                should_retry = True
+                # 连接级错误 (代理拒连 / host 不可达): 立即 fail-fast, 不白付重试预算;
+                # 由上游熔断开路, 后续请求毫秒级短路.
+                should_retry = False
+                await self._connectivity_failure(host_key, proxy_key)
+                # 多代理池 (P2-⑦): 该代理来自池且池内还有未试过的健康代理 → 换一个重发
+                # (与指纹轮换一样不占重试预算; 死代理的熔断计数已在上面累加).
+                rotated = self._rotate_proxy(use_pool, tried_proxies)
+                if rotated is not None:
+                    proxy, proxy_key = rotated
+                    logger.warning("proxy rotated", url=url, proxy=proxy, error=failure.message)
+                    continue
             except TimeoutError:
                 failure = RequestFailure(kind=FailureKind.TIMEOUT, message="timeout")
+                # 超时保留重试 (可能是慢服务器), 但记录失败以便熔断在持续超时时开路.
                 should_retry = True
+                await self._connectivity_failure(host_key, proxy_key)
+                # 超时同样可能是代理质量问题: 池内有备用代理时换一个再试.
+                rotated = self._rotate_proxy(use_pool, tried_proxies)
+                if rotated is not None:
+                    proxy, proxy_key = rotated
+                    logger.warning("proxy rotated", url=url, proxy=proxy, error="timeout")
+                    continue
             except Exception as e:
                 failure = RequestFailure(kind=FailureKind.UNEXPECTED, message=f"unexpected: {type(e).__name__}: {e}")
 
@@ -374,14 +689,62 @@ class WebClient:
             duration_s=round(time.monotonic() - t0, 2),
         )
         self._record_exchange(method, url, resp=resp, error=failure.message if failure else None, t0=t0, attempts=sent)
+        # 自适应限速 (P2-⑥): 429/5xx/连接错误在此汇总成一次观测 (重试过程中的中间状态见日志).
+        await self._limiters.observe(host, time.monotonic() - t0, failure.status if failure else None)
         raise RequestError(url, failure)
+
+    def _store_response(self, cache_key: tuple, url: str, resp: Response) -> None:
+        """把 2xx 文本类 GET 响应写入缓存; 大响应/二进制/异常一律跳过 (下载与分片不占缓存)."""
+        try:
+            content = resp.content
+        except Exception:
+            return
+        if content is None or len(content) > _RESPONSE_CACHE_MAX_BODY:
+            return
+        content_type = (resp.headers.get("Content-Type") or resp.headers.get("content-type") or "").lower()
+        if not any(content_type.startswith(prefix) for prefix in _CACHABLE_CONTENT_TYPES):
+            return
+        try:
+            raw_headers = dict(resp.headers)
+        except Exception:
+            raw_headers = {}
+        final_url = str(resp.url) if resp.url else url
+        self._response_cache.put(
+            cache_key,
+            CachedResponse(
+                status_code=resp.status_code,
+                headers=raw_headers,
+                content=content,
+                url=final_url,
+            ),
+        )
+
+    async def _connectivity_success(self, host_key: str | None, proxy_key: str | None) -> None:
+        """成功出站后复位对应 key 的失败计数 (开路 → 关闭, 健康保持)."""
+        breaker = self._connectivity
+        if breaker is None:
+            return
+        if host_key:
+            await breaker.record_success(host_key)
+        if proxy_key:
+            await breaker.record_success(proxy_key)
+
+    async def _connectivity_failure(self, host_key: str | None, proxy_key: str | None) -> None:
+        """连接级失败后累加对应 key 的失败计数; 达阈值由熔断器开路."""
+        breaker = self._connectivity
+        if breaker is None:
+            return
+        if host_key:
+            await breaker.record_failure(host_key)
+        if proxy_key:
+            await breaker.record_failure(proxy_key)
 
     def _record_exchange(
         self,
         method: str,
         url: str,
         *,
-        resp: Response | None,
+        resp: Response | CachedResponse | None,
         error: str | None,
         t0: float,
         attempts: int | None = None,

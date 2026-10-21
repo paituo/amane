@@ -62,6 +62,8 @@ class FailureReason(StrEnum):
     """响应与读模型不符 (字段缺失/类型变化); 通常意味着站点 schema 已变更."""
     CRAWLER_UNAVAILABLE = "crawler_unavailable"
     """来源实例缺失或构造失败 (配置与插件不再匹配等)."""
+    CIRCUIT_OPEN = "circuit_open"
+    """连接健康熔断已开路: 代理或 host 被连续失败判定为不可用, 请求被短路未触网."""
     UNEXPECTED = "unexpected"
 
 
