@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from contextlib import AsyncExitStack
@@ -423,6 +424,16 @@ class _LocalBackend(ABC):
             task.cancel()
 
 
+def _browser_proxy(server: str) -> str:
+    """代理地址 → 浏览器可接受的写法.
+
+    ``socks5h://`` / ``socks4a://`` 是 curl 专有写法 (后缀表示由代理解析域名),
+    Chromium 不认这两个 scheme, 原样传入会让每次导航以 ``ERR_NO_SUPPORTED_PROXIES``
+    失败; 浏览器的 SOCKS 代理本就由代理端解析域名, 去掉后缀与 ``socks5h`` 等价.
+    """
+    return re.sub(r"^(socks[45])(?:h|a)://", r"\1://", server, flags=re.IGNORECASE)
+
+
 class PatchrightBackend(_LocalBackend):
     """patchright 驱动的系统 Chrome; ``AMANE_SHOW_BROWSER`` 置位时强制有头."""
 
@@ -434,7 +445,7 @@ class PatchrightBackend(_LocalBackend):
             channel="chrome",
             headless=os.getenv("AMANE_SHOW_BROWSER") is None,
             args=["--disable-blink-features=AutomationControlled"],
-            proxy={"server": self._proxy} if self._proxy else None,
+            proxy={"server": _browser_proxy(self._proxy)} if self._proxy else None,
         )
         stack.push_async_callback(browser.close)
         return browser
@@ -462,7 +473,7 @@ class CamoufoxBackend(_LocalBackend):
             "locale": "ja-JP",
         }
         if self._proxy:
-            options["proxy"] = {"server": self._proxy}
+            options["proxy"] = {"server": _browser_proxy(self._proxy)}
         browser = await stack.enter_async_context(AsyncCamoufox(**options))
         # 未启用 persistent_context, 返回值必为 Browser.
         if not isinstance(browser, Browser):
