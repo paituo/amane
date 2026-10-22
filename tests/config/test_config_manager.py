@@ -84,8 +84,12 @@ class TestColdSettings:
             ColdSettings(safe_dirs=123)  # type: ignore[arg-type]
 
     def test_resources_dir_defaults_to_data_dir(self):
-        """未设置时资源目录仍是 data_dir/resources, 既有部署行为不变."""
-        s = ColdSettings(data_dir=Path("/srv/amane/data"))
+        """未设置时资源目录仍是 data_dir/resources, 既有部署行为不变.
+
+        显式传 ``resources_dir=None``: 否则开发机上的 ``.env`` 或环境变量里若已配置
+        ``AMANE_RESOURCES_DIR``, 会被读进来, 测的就不是默认行为了.
+        """
+        s = ColdSettings(data_dir=Path("/srv/amane/data"), resources_dir=None)
         assert s.resolved_resources_dir == Path("/srv/amane/data/resources")
 
     def test_resources_dir_env_outside_data_dir(self, tmp_path: Path):
