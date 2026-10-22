@@ -12,6 +12,7 @@ import {
   ScrollArea,
   SimpleGrid,
   Stack,
+  Switch,
   Text,
   Textarea,
   Title,
@@ -26,7 +27,9 @@ import {
   IconPlayerPause,
   IconPlayerPlay,
   IconPlayerStop,
+  IconPlugConnected,
   IconPlus,
+  IconPower,
   IconRefresh,
   IconTrash,
 } from "@tabler/icons-react";
@@ -38,6 +41,8 @@ import { useTranslation } from "react-i18next";
 import { z } from "zod";
 import {
   batchTasksMutation,
+  disableTaskWorkerMutation,
+  enableTaskWorkerMutation,
   getTaskWorkerOptions,
   getTaskWorkerQueryKey,
   listTasksOptions,
@@ -291,6 +296,7 @@ function TasksPage() {
 
   const { data: worker } = useQuery(getTaskWorkerOptions());
   const paused = worker?.paused === true;
+  const engineEnabled = worker?.enabled !== false;
 
   const invalidate = () => {
     invalidateTaskQueries(queryClient);
@@ -324,6 +330,23 @@ function TasksPage() {
       void queryClient.invalidateQueries({ queryKey: getTaskWorkerQueryKey() });
     },
   });
+  // 总闸写进配置, 重启沿用; 与原暂停按钮的区别只在持久化与否.
+  const enableEngineMutation = useMutation({
+    ...enableTaskWorkerMutation(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: getTaskWorkerQueryKey() });
+    },
+  });
+  const disableEngineMutation = useMutation({
+    ...disableTaskWorkerMutation(),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: getTaskWorkerQueryKey() });
+    },
+  });
+
+  function toggleEngine(next: boolean) {
+    (next ? enableEngineMutation : disableEngineMutation).mutate({});
+  }
 
   const cancelFilter = filterBatchBody(search, CANCELABLE_STATUSES);
   const retryFilter = filterBatchBody(search, FAILED_STATUS);
@@ -596,9 +619,19 @@ function TasksPage() {
           </Group>
           <Group gap={4} wrap="nowrap" ml="auto" style={{ flexShrink: 0 }}>
             <HintedActionIcon
+              label={engineEnabled ? t("worker.disableEngine") : t("worker.enableEngine")}
+              variant={engineEnabled ? "light" : "filled"}
+              color={engineEnabled ? undefined : "orange"}
+              size="lg"
+              onClick={() => toggleEngine(!engineEnabled)}
+            >
+              {engineEnabled ? <IconPower size={16} /> : <IconPlugConnected size={16} />}
+            </HintedActionIcon>
+            <HintedActionIcon
               label={paused ? t("worker.resume") : t("worker.pause")}
               variant={paused ? "filled" : "light"}
               size="lg"
+              disabled={!engineEnabled}
               loading={pauseMutation.isPending || resumeMutation.isPending}
               onClick={() => (paused ? resumeMutation.mutate({}) : pauseMutation.mutate({}))}
             >
@@ -699,10 +732,18 @@ function TasksPage() {
               <Text size="sm" c="dimmed">
                 {t("total", { count: total })}
               </Text>
+              <Switch
+                size="sm"
+                checked={engineEnabled}
+                label={t("worker.engine")}
+                disabled={enableEngineMutation.isPending || disableEngineMutation.isPending}
+                onChange={(event) => toggleEngine(event.currentTarget.checked)}
+              />
               <Button
                 size="sm"
                 variant={paused ? "filled" : "light"}
                 leftSection={paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />}
+                disabled={!engineEnabled}
                 loading={pauseMutation.isPending || resumeMutation.isPending}
                 onClick={() => (paused ? resumeMutation.mutate({}) : pauseMutation.mutate({}))}
               >

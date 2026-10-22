@@ -3663,6 +3663,7 @@ export const HotSettingsSchema = {
         worker: {
             $ref: '#/components/schemas/WorkerConfig',
             default: {
+                enabled: true,
                 concurrency: 10,
                 poll_interval: 2,
                 shutdown_timeout: 0,
@@ -9582,6 +9583,10 @@ export const TaskTypeSchema = {
 
 export const TaskWorkerResponseSchema = {
     properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
         paused: {
             type: 'boolean',
             title: 'Paused'
@@ -9589,6 +9594,7 @@ export const TaskWorkerResponseSchema = {
     },
     type: 'object',
     required: [
+        'enabled',
         'paused'
     ],
     title: 'TaskWorkerResponse'
@@ -10204,6 +10210,11 @@ export const WatermarkKindSchema = {
 
 export const WorkerConfigSchema = {
     properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled',
+            default: true
+        },
         concurrency: {
             type: 'integer',
             maximum: 64,

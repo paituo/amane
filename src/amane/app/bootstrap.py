@@ -205,6 +205,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
         event_bus=event_bus,
         log_dir=cold.log_dir,
         get_hot=lambda: config.hot,
+        paused=not hot.worker.enabled,
     )
     worker.start()
 

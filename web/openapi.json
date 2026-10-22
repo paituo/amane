@@ -5272,6 +5272,48 @@
         }
       }
     },
+    "/api/tasks/worker/enable": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Enable Task Worker",
+        "operationId": "enable_task_worker",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskWorkerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/tasks/worker/disable": {
+      "post": {
+        "tags": [
+          "tasks"
+        ],
+        "summary": "Disable Task Worker",
+        "operationId": "disable_task_worker",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskWorkerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/tasks/batch": {
       "post": {
         "tags": [
@@ -9953,6 +9995,7 @@
           "worker": {
             "$ref": "#/components/schemas/WorkerConfig",
             "default": {
+              "enabled": true,
               "concurrency": 10,
               "poll_interval": 2.0,
               "shutdown_timeout": 0.0,
@@ -15751,6 +15794,10 @@
       },
       "TaskWorkerResponse": {
         "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
           "paused": {
             "type": "boolean",
             "title": "Paused"
@@ -15758,6 +15805,7 @@
         },
         "type": "object",
         "required": [
+          "enabled",
           "paused"
         ],
         "title": "TaskWorkerResponse"
@@ -16353,6 +16401,11 @@
       },
       "WorkerConfig": {
         "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled",
+            "default": true
+          },
           "concurrency": {
             "type": "integer",
             "maximum": 64.0,

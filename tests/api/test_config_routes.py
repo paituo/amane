@@ -131,3 +131,17 @@ class TestConfigRebuild:
         assert resp.status_code == 200
         assert runtime.browser is rebuilt
         assert rebuilt._closed is False
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_rebuild_keeps_engine_disabled(self, client: AsyncClient, app):
+        """重建会换新 worker; 总闸状态必须跟过去, 否则改任一配置都会把引擎悄悄放行."""
+        runtime = app.state.runtime
+        assert (await client.post("tasks/worker/disable")).json()["enabled"] is False
+        old_worker = runtime.worker
+
+        resp = await client.patch("config", json={"worker": {"concurrency": 4}})
+        assert resp.status_code == 200
+
+        assert runtime.worker is not old_worker
+        assert runtime.worker.is_paused is True
+        assert (await client.get("tasks/worker")).json() == {"enabled": False, "paused": True}

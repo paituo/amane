@@ -389,6 +389,9 @@
   },
   "worker": {
     "pause": "暂停",
-    "resume": "恢复"
+    "resume": "恢复",
+    "engine": "任务引擎",
+    "enableEngine": "启用任务引擎",
+    "disableEngine": "停用任务引擎"
   }
 }

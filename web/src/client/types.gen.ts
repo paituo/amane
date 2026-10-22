@@ -4913,6 +4913,10 @@ export type TaskType = 'scrape' | 'organize' | 'refresh' | 'cleanup' | 'upscale'
  */
 export type TaskWorkerResponse = {
     /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
      * Paused
      */
     paused: boolean;
@@ -5328,6 +5332,10 @@ export type WatermarkKind = 'subtitle' | 'uncensored' | 'cracked' | 'leaked' | '
  * WorkerConfig
  */
 export type WorkerConfig = {
+    /**
+     * Enabled
+     */
+    enabled?: boolean;
     /**
      * Concurrency
      */
@@ -8332,6 +8340,38 @@ export type ResumeTaskWorkerResponses = {
 };
 
 export type ResumeTaskWorkerResponse = ResumeTaskWorkerResponses[keyof ResumeTaskWorkerResponses];
+
+export type EnableTaskWorkerData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/tasks/worker/enable';
+};
+
+export type EnableTaskWorkerResponses = {
+    /**
+     * Successful Response
+     */
+    200: TaskWorkerResponse;
+};
+
+export type EnableTaskWorkerResponse = EnableTaskWorkerResponses[keyof EnableTaskWorkerResponses];
+
+export type DisableTaskWorkerData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/tasks/worker/disable';
+};
+
+export type DisableTaskWorkerResponses = {
+    /**
+     * Successful Response
+     */
+    200: TaskWorkerResponse;
+};
+
+export type DisableTaskWorkerResponse = DisableTaskWorkerResponses[keyof DisableTaskWorkerResponses];
 
 export type BatchTasksData = {
     body: TaskBatchRequest;

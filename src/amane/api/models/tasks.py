@@ -148,7 +148,11 @@ class TaskBatchResponse(BaseModel):
 
 
 class TaskWorkerResponse(BaseModel):
+    enabled: bool
+    """任务引擎总闸, 持久化在 ``worker.enabled``."""
+
     paused: bool
+    """任务引擎是否停止认领. 总闸关闭时为真."""
 
 
 class ScrapeRequest(BaseModel):

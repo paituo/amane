@@ -54,6 +54,7 @@ class AsyncWorker:
         event_bus: EventBus | None = None,
         log_dir: Path | None = None,
         get_hot: Callable[[], HotSettings] | None = None,
+        paused: bool = False,
     ):
         self._repo = repo
         self._handlers = handlers
@@ -72,7 +73,7 @@ class AsyncWorker:
         self._get_hot = get_hot
         self._active_recorders: dict[int, Recorder] = {}  # 未 finalize 的 Recorder, shutdown 时关闭
         self._cleanup_tasks: set[asyncio.Task[bool]] = set()  # 取消兜底写入, 保持引用
-        self._paused = False
+        self._paused = paused
 
     @property
     def is_main(self) -> bool:

@@ -436,7 +436,8 @@ class AppRuntime:
         rebuild 是同步的, 不能 await.
         """
         hot = self.config.hot
-        paused = self.worker.is_paused
+        # 总闸写进新 worker 的初始状态: 重建路径不止一处, 靠调用方在 start() 前补判断迟早漏掉.
+        paused = self.worker.is_paused or not hot.worker.enabled
 
         # 日志级别即时生效, 无需重建
         logging.getLogger("amane").setLevel(hot.logging.level)
@@ -490,8 +491,8 @@ class AppRuntime:
             event_bus=self.event_bus,
             log_dir=self.config.cold.log_dir,
             get_hot=lambda: self.config.hot,
+            paused=paused,
         )
-        self.worker.set_paused(paused)
 
         if self.agent_service is not None:
             self.agent_service.rebuild(hot.agent)
@@ -520,6 +521,23 @@ class AppRuntime:
         async with self._rebuild_lock:
             self._ensure_open()
             await self._apply_rebuild_unlocked()
+
+    async def set_worker_enabled(self, enabled: bool) -> None:
+        """任务引擎总闸: 持久化后直接作用在当前 worker, 不触发 rebuild.
+
+        总闸不改变网络栈与处理器, 走 ``apply_rebuild`` 会为一次开关重建浏览器池并让旧 worker 退役.
+        """
+        async with self._rebuild_lock:
+            self._ensure_open()
+            self.config.update({"worker": {"enabled": enabled}})
+            self.worker.set_paused(not enabled)
+
+    def set_worker_paused(self, paused: bool) -> None:
+        """运行期暂停, 不落配置. 总闸关闭时拒绝恢复: 否则恢复动作会绕过总闸放行认领."""
+        if not paused and not self.config.hot.worker.enabled:
+            logger.info("worker resume ignored, engine disabled")
+            return
+        self.worker.set_paused(paused)
 
     async def reload_plugins(self) -> PluginManager:
         """Rediscover drop-ins under ``plugins/sources`` and rebuild the scrape stack."""

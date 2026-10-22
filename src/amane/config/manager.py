@@ -636,6 +636,9 @@ class NetworkConfig(BaseModel):
 
 
 class WorkerConfig(BaseModel):
+    enabled: bool = True
+    """任务引擎总闸. 关闭时只停认领, 入队与已认领任务不受影响; 状态持久化, 重启沿用."""
+
     concurrency: int = Field(default=10, ge=1, le=64)
     poll_interval: float = Field(default=2.0, ge=0.1, le=10, json_schema_extra={"x-hidden": True})
     shutdown_timeout: float = Field(default=0, ge=0, le=120.0, json_schema_extra={"x-hidden": True})

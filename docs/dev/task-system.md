@@ -142,6 +142,12 @@ handler 之间复用的阶段逻辑, 不是一条可跳步的总管线:
 
 进程内 `_paused`, 不写入 HotSettings. 暂停只停 `claim_next_task`, 循环仍在, 已认领的继续运行, 入队不受影响. `_rebuild()` 把 pause 复制到新 worker, 避免 PATCH 配置时意外恢复领队. 与退役不同: 退役不可逆且主循环退出.
 
+### 引擎总闸
+
+`worker.enabled` 是持久化总闸, 与暂停同为「只停认领」: 入队 (API / Schedule / Feed / Watcher / 链式后继) 照常, 已认领任务跑完. 区别只在持久化与覆盖面 —— 暂停在重启或改配置后可能消失, 总闸写进 TOML, 重启沿用. `AppRuntime.set_worker_enabled` 只改配置与当前 worker, 不走 `apply_rebuild`: 总闸不改变网络栈与处理器, 没必要为一次开关重建浏览器池.
+
+两个状态的单一真相是 worker 的 `_paused`: 总闸关闭时构造即 paused, `_rebuild` 按 `is_paused or not enabled` 传给新 worker, 因此任何重建路径都不会把总闸放行 (漏一处即「改个并发数引擎就偷偷跑起来」). 反向同样要堵 — 总闸关闭时 `set_worker_paused(False)` 拒绝执行, 否则恢复动作会绕过总闸. 关闭总闸不取消运行中任务, 也不清扫 RUNNING 行; 那两条仍只属于关闭进程路径.
+
 ### 取消
 
 `AsyncWorker.cancel_task(task_id)` 通过给运行中的 asyncio task 注入 `CancelledError`; `AppRuntime.cancel_task` 依次尝试当前与退役 worker, 批量接口与助理 bridge 都经由它.

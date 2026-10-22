@@ -580,6 +580,10 @@
       }
     },
     "worker": {
+      "enabled": {
+        "label": "Task Engine",
+        "description": "When off, no task is claimed for execution; enqueueing and running tasks are unaffected, and this state persists across restarts"
+      },
       "concurrency": {
         "label": "Concurrency",
         "description": "Maximum number of tasks to run at once"

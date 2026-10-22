@@ -580,6 +580,10 @@
       }
     },
     "worker": {
+      "enabled": {
+        "label": "任务引擎",
+        "description": "关闭后不认领任何任务执行; 入队与运行中的任务不受影响, 该状态在重启后保持"
+      },
       "concurrency": {
         "label": "并发数",
         "description": "同时执行的最大任务数"

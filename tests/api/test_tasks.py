@@ -248,11 +248,30 @@ class TestTaskWorker:
         resp = await client.get("tasks/worker")
         assert resp.status_code == 200
         assert resp.json()["paused"] is False
+        assert resp.json()["enabled"] is True
         paused = await client.post("tasks/worker/pause")
         assert paused.json()["paused"] is True
         assert app.state.runtime.worker.is_paused is True
         resumed = await client.post("tasks/worker/resume")
         assert resumed.json()["paused"] is False
+        assert app.state.runtime.worker.is_paused is False
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_engine_switch_persists(self, client: AsyncClient, app: FastAPI):
+        """总闸写进配置; 关闭后入队照常, 只是不认领."""
+        disabled = await client.post("tasks/worker/disable")
+        assert disabled.json() == {"enabled": False, "paused": True}
+        assert app.state.runtime.config.hot.worker.enabled is False
+        assert app.state.runtime.worker.is_paused is True
+
+        # 总闸关闭时 resume 不得绕过它放行认领
+        resumed = await client.post("tasks/worker/resume")
+        assert resumed.json() == {"enabled": False, "paused": True}
+        assert app.state.runtime.worker.is_paused is True
+
+        enabled = await client.post("tasks/worker/enable")
+        assert enabled.json() == {"enabled": True, "paused": False}
+        assert app.state.runtime.config.hot.worker.enabled is True
         assert app.state.runtime.worker.is_paused is False
 
 

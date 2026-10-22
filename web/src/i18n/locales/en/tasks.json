@@ -414,6 +414,9 @@
   },
   "worker": {
     "pause": "Pause",
-    "resume": "Resume"
+    "resume": "Resume",
+    "engine": "Task engine",
+    "enableEngine": "Enable task engine",
+    "disableEngine": "Disable task engine"
   }
 }

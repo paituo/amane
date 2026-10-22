@@ -325,6 +325,32 @@ async def test_worker_processes_task(repo: Repository) -> None:
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_worker_constructed_paused_does_not_claim(repo: Repository) -> None:
+    """构造即暂停时不认领, 恢复后才开始消费排队任务."""
+    tracker = Tracker()
+    worker = AsyncWorker(
+        repo=repo, handlers={TaskType.SCRAPE: SuccessHandler(tracker)}, poll_interval=0.05, paused=True
+    )
+
+    t = await repo.create_task(TaskType.SCRAPE, payload={"number": "PAUSED-001"})
+    assert t.id is not None
+    worker.start()
+    await asyncio.sleep(0.2)
+
+    assert tracker.calls == []
+    queued = await repo.get_task(t.id)
+    assert queued is not None
+    assert queued.status == TaskStatus.QUEUED
+
+    worker.set_paused(False)
+    done_ids = await recv(worker, 1)
+    await stop_worker(worker)
+
+    assert done_ids == [t.id]
+    assert tracker.calls == [{"number": "PAUSED-001"}]
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_worker_handles_failure(repo: Repository) -> None:
     """Handler 返回失败时 worker 正确处理"""
     tracker = Tracker()

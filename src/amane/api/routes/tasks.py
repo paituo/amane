@@ -189,21 +189,38 @@ async def get_task_schema() -> dict:
     return TypeAdapter(TaskSubmission).json_schema()
 
 
+def _worker_response(config: ConfigDep, runtime: RuntimeDep) -> TaskWorkerResponse:
+    """``paused`` 读 worker 实际状态: 总闸关闭时 worker 恒为 paused, 不受单次暂停开关左右."""
+    return TaskWorkerResponse(enabled=config.hot.worker.enabled, paused=runtime.worker.is_paused)
+
+
 @router.get("/worker")
-async def get_task_worker(runtime: RuntimeDep) -> TaskWorkerResponse:
-    return TaskWorkerResponse(paused=runtime.worker.is_paused)
+async def get_task_worker(runtime: RuntimeDep, config: ConfigDep) -> TaskWorkerResponse:
+    return _worker_response(config, runtime)
 
 
 @router.post("/worker/pause")
-async def pause_task_worker(runtime: RuntimeDep) -> TaskWorkerResponse:
-    runtime.worker.set_paused(True)
-    return TaskWorkerResponse(paused=True)
+async def pause_task_worker(runtime: RuntimeDep, config: ConfigDep) -> TaskWorkerResponse:
+    runtime.set_worker_paused(True)
+    return _worker_response(config, runtime)
 
 
 @router.post("/worker/resume")
-async def resume_task_worker(runtime: RuntimeDep) -> TaskWorkerResponse:
-    runtime.worker.set_paused(False)
-    return TaskWorkerResponse(paused=False)
+async def resume_task_worker(runtime: RuntimeDep, config: ConfigDep) -> TaskWorkerResponse:
+    runtime.set_worker_paused(False)
+    return _worker_response(config, runtime)
+
+
+@router.post("/worker/enable")
+async def enable_task_worker(runtime: RuntimeDep, config: ConfigDep) -> TaskWorkerResponse:
+    await runtime.set_worker_enabled(True)
+    return _worker_response(config, runtime)
+
+
+@router.post("/worker/disable")
+async def disable_task_worker(runtime: RuntimeDep, config: ConfigDep) -> TaskWorkerResponse:
+    await runtime.set_worker_enabled(False)
+    return _worker_response(config, runtime)
 
 
 @router.post("/batch")
