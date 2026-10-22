@@ -184,7 +184,8 @@ class _StubAvailability:
 async def test_rescrape_injects_disabled_sources(repo: Repository):
     """影片补刮扇出的 SCRAPE 携带 disabled_sources; 演员补刮不改 (由熔断器覆盖)."""
     await repo.upsert_metadata(number="A-001")
-    handler = RescrapeHandler(repo, availability=_StubAvailability({"javdb"}))
+    # 鸭子类型替身: 只实现 handler 用到的 disabled_sources, 不构造完整探测依赖.
+    handler = RescrapeHandler(repo, availability=_StubAvailability({"javdb"}))  # type: ignore[arg-type]
     result = await handler.handle(RescrapePayload(limit=10))
     assert result.result is not None
     scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]

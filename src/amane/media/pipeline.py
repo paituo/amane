@@ -3,6 +3,7 @@
 与整理到媒体库路径无关. 任一步失败不抛, 仅降级.
 """
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +27,8 @@ from .images import (
 from .resource_store import RESOURCE_URL_PREFIX
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable
+
     from ..config import HotSettings, SrConfig
     from ..db.models import Resource
     from ..net.http import WebClient
@@ -100,36 +103,45 @@ async def materialize_images(
     extrafanart 仅下载到 Resource, 站点分组结构不重排.
     """
     kinds = set(config.scraping.download_resources)
+    want_thumb = DownloadableResource.thumb in kinds
+    want_poster = DownloadableResource.poster in kinds
 
-    # 下载 thumb.
-    thumb_ok: set[str] = set()
+    # thumb 与 poster 一并取: 两者互不依赖, 串行只会在限速桶前排队.
+    # 结果列表与 URL 列表严格等长 (未选该类型时填 None), 下游一律 zip(..., strict=True).
+    thumb_results: list[Path | None] = [None] * len(thumb_urls)
+    poster_results: list[Path | None] = [None] * len(poster_urls)
+    jobs: list[Awaitable[Path | None]] = []
+    if want_thumb:
+        jobs.extend(store.acquire(url, client) for url in thumb_urls)
+    if want_poster:
+        jobs.extend(store.acquire(url, client) for url in poster_urls)
+    if jobs:
+        fetched = list(await asyncio.gather(*jobs))
+        if want_thumb:
+            thumb_results = fetched[: len(thumb_urls)]
+        if want_poster:
+            poster_results = fetched[len(thumb_urls) :]
+
+    # 下载 thumb; 首个成功的作为裁 poster 的源.
+    thumb_ok: set[str] = {url for url, local in zip(thumb_urls, thumb_results, strict=True) if local}
     thumb_local: Path | None = None
     thumb_src: str | None = None
-    if DownloadableResource.thumb in kinds:
-        for url in thumb_urls:
-            local = await store.acquire(url, client)
-            if local:
-                thumb_ok.add(url)
-                if thumb_local is None:
-                    thumb_local, thumb_src = local, url
-                    res = await store.get_by_url(url)
-                    if res:
-                        await _maybe_upscale(store, res, config, data_dir)
+    for url, local in zip(thumb_urls, thumb_results, strict=True):
+        if local:
+            thumb_local, thumb_src = local, url
+            res = await store.get_by_url(url)
+            if res:
+                await _maybe_upscale(store, res, config, data_dir)
+            break
 
     # 下载 poster; 候选偏矮则从 thumb 裁剪.
-    poster_ok: set[str] = set()
-    poster_candidate_local: Path | None = None
+    poster_ok: set[str] = {url for url, local in zip(poster_urls, poster_results, strict=True) if local}
+    poster_candidate_local: Path | None = next((p for p in poster_results if p is not None), None)
     result_poster_urls = list(poster_urls)
-    if DownloadableResource.poster in kinds:
-        for url in poster_urls:
-            local = await store.acquire(url, client)
-            if local:
-                poster_ok.add(url)
-                if poster_candidate_local is None:
-                    poster_candidate_local = local
-
-        # 裁剪需要 thumb 本地文件; 若未选 thumb 下载, 为裁剪临时 acquire 首个 thumb.
-        if thumb_local is None and thumb_urls and config.scraping.crop_poster:
+    if want_poster:
+        # 裁剪需要 thumb 本地文件; 若未选 thumb 下载, 为裁剪临时 acquire 首个可用 thumb.
+        # 已尝试过 thumb 下载且全失败时不再重试同一批 URL: 结果不会变, 只是白付一轮请求.
+        if thumb_local is None and not want_thumb and thumb_urls and config.scraping.crop_poster:
             for url in thumb_urls:
                 local = await store.acquire(url, client)
                 if local:
@@ -170,7 +182,7 @@ async def materialize_images(
     trailer_ok: set[str] = set()
     if DownloadableResource.trailer in kinds:
         for url in trailer_urls:
-            local = await store.acquire(url, client)
+            local = await store.acquire(url, client, expect_large=True)
             if local:
                 trailer_ok.add(url)
 

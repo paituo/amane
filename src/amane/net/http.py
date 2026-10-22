@@ -7,6 +7,8 @@ import asyncio
 import random
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Any, cast
 
 import aiofiles
@@ -88,6 +90,26 @@ _PROXY_BLAME_CURL_CODES = frozenset({5, 6, 7})
 单个站点不响应不足以判定代理不可用; 若计入 ``proxy:`` 锁, 一次站点超时即使共享代理开路,
 经由该代理的所有站点随之短路 (实测: official 超时开路后 dmm/javdb/javbus 全部短路,
 333 个失败任务中 321 个未发出任何请求即判定无数据)."""
+
+
+class RateChannel(StrEnum):
+    """限速通道. 同一 host 上页面抓取与资源下载用各自独立的桶.
+
+    图片与页面常常落在同一 host (如 ``www.javbus.com/pics/cover/*.jpg``), 共用一个桶时
+    站点的礼貌速率 (1 req/s) 会把图片也拖到 1 req/s; 分开后图片走 CDN 语义的速率,
+    页面仍按站点速率 —— 互不挤占, 也互不放大对方的风险.
+    """
+
+    page = "page"
+    image = "image"
+
+
+@dataclass(frozen=True, slots=True)
+class ProbeResult:
+    """一次 HEAD 探测的结果. ``size`` 为 ``None`` 表示未拿到 Content-Length 或探测失败."""
+
+    size: int | None
+    final_url: str
 
 
 def _response_cache_key(
@@ -257,10 +279,13 @@ class _AdaptiveLimiter:
 
 
 class RateLimiters:
-    """按 host 的自适应平滑限速 (P2-⑥).
+    """按 (host, 通道) 的自适应平滑限速 (P2-⑥).
 
-    每个 host 一个 ``_AdaptiveLimiter``: 配置速率是礼貌上限, 观测延迟/状态在
+    每个 host 每个通道一个 ``_AdaptiveLimiter``: 配置速率是礼貌上限, 观测延迟/状态在
     ``[floor, 配置]`` 内浮动. ``adaptive=False`` 时退化为改造前的固定速率严格平滑桶.
+
+    ``page`` 通道按站点速率抓页面, ``image`` 通道按 CDN 速率取图; 两者的配置来源互不相干
+    (站点 ``rate_limit`` 只作用于 page, ``network.image_rate_limits`` 只作用于 image).
 
     与熔断 (P0-①) 的分工: 熔断管"连不上就短路", 本类管"连得上但别太吵".
     """
@@ -274,13 +299,23 @@ class RateLimiters:
         *,
         adaptive: bool = True,
         floor_ratio: float = 0.25,
+        image_default_rate: float = 10.0,
+        image_adaptive: bool = False,
     ):
         self._default_rate = default_rate
         self._adaptive = adaptive
         self._floor_ratio = floor_ratio
+        # 图片桶默认不参与自适应: 图床按 CDN 语义服务, 一次 5xx 不该把后续取图长期锁在半速;
+        # 页面桶保留自适应, 那里的降速是对反爬信号的礼貌回应.
+        self._image_default_rate = image_default_rate
+        self._image_adaptive = image_adaptive
         self._limiters: dict[str, _AdaptiveLimiter] = {
             "127.0.0.1": _make_limiter(self._LOCALHOST_RATE, adaptive=adaptive, floor_ratio=floor_ratio),
             "localhost": _make_limiter(self._LOCALHOST_RATE, adaptive=adaptive, floor_ratio=floor_ratio),
+        }
+        self._image_limiters: dict[str, _AdaptiveLimiter] = {
+            "127.0.0.1": _make_limiter(self._LOCALHOST_RATE, adaptive=image_adaptive, floor_ratio=floor_ratio),
+            "localhost": _make_limiter(self._LOCALHOST_RATE, adaptive=image_adaptive, floor_ratio=floor_ratio),
         }
 
     @classmethod
@@ -294,9 +329,22 @@ class RateLimiters:
         default_rate: float = 5,
         adaptive: bool = True,
         floor_ratio: float = 0.25,
+        image_rate_limits: Mapping[str, float] | None = None,
+        image_default_rate: float = 10.0,
+        image_adaptive: bool = False,
     ) -> RateLimiters:
-        """优先级: 全局 network.rate_limits > site_config.rate_limit > 默认."""
-        instance = cls(default_rate=default_rate, adaptive=adaptive, floor_ratio=floor_ratio)
+        """page 通道优先级: 全局 network.rate_limits > site_config.rate_limit > 默认.
+
+        image 通道只认 ``network.image_rate_limits`` 与 ``image_default_rate``:
+        站点级的 ``rate_limit`` 是给页面定的礼貌速率, 套到图床只会把取图拖慢.
+        """
+        instance = cls(
+            default_rate=default_rate,
+            adaptive=adaptive,
+            floor_ratio=floor_ratio,
+            image_default_rate=image_default_rate,
+            image_adaptive=image_adaptive,
+        )
 
         # site_config.rate_limit (低优先级)
         for site_name, cfg in site_configs.items():
@@ -324,28 +372,61 @@ class RateLimiters:
         for host, rate in network_rate_limits.items():
             instance._limiters[host] = _make_limiter(rate, adaptive=adaptive, floor_ratio=floor_ratio)
 
+        for host, rate in (image_rate_limits or {}).items():
+            instance._image_limiters[host] = _make_limiter(rate, adaptive=image_adaptive, floor_ratio=floor_ratio)
+
         configured = len(instance._limiters) - len(cls._BUILTIN_HOSTS)
-        if configured:
-            logger.info("rate_limiters.created", configured_hosts=configured, adaptive=adaptive)
+        configured_images = len(instance._image_limiters) - len(cls._BUILTIN_HOSTS)
+        if configured or configured_images:
+            logger.info(
+                "rate_limiters.created",
+                configured_hosts=configured,
+                configured_image_hosts=configured_images,
+                adaptive=adaptive,
+                image_adaptive=image_adaptive,
+            )
 
         return instance
 
-    def get(self, host: str, *, rate: float | None = None) -> _AdaptiveLimiter:
-        if host not in self._limiters:
-            self._limiters[host] = _make_limiter(
-                rate or self._default_rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio
-            )
-        return self._limiters[host]
+    def _bucket(self, channel: RateChannel) -> dict[str, _AdaptiveLimiter]:
+        return self._image_limiters if channel is RateChannel.image else self._limiters
 
-    def set_rate(self, host: str, rate: float) -> None:
+    def get(self, host: str, *, channel: RateChannel = RateChannel.page, rate: float | None = None) -> _AdaptiveLimiter:
+        bucket = self._bucket(channel)
+        if host not in bucket:
+            if channel is RateChannel.image:
+                bucket[host] = _make_limiter(
+                    rate or self._image_default_rate,
+                    adaptive=self._image_adaptive,
+                    floor_ratio=self._floor_ratio,
+                )
+            else:
+                bucket[host] = _make_limiter(
+                    rate or self._default_rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio
+                )
+        return bucket[host]
+
+    def set_rate(self, host: str, rate: float, *, channel: RateChannel = RateChannel.page) -> None:
         """配置变更 (热重载): 换全新限流器, 自适应状态一并复位到新配置速率."""
-        self._limiters[host] = _make_limiter(rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio)
+        if channel is RateChannel.image:
+            self._image_limiters[host] = _make_limiter(
+                rate, adaptive=self._image_adaptive, floor_ratio=self._floor_ratio
+            )
+        else:
+            self._limiters[host] = _make_limiter(rate, adaptive=self._adaptive, floor_ratio=self._floor_ratio)
 
-    async def observe(self, host: str | None, latency_s: float | None, status: int | None) -> None:
+    async def observe(
+        self,
+        host: str | None,
+        latency_s: float | None,
+        status: int | None,
+        *,
+        channel: RateChannel = RateChannel.page,
+    ) -> None:
         """上报一次 ``WebClient.request()`` 结局; ``host=None`` / 未预创建 / 关闭自适应均为无操作."""
         if host is None:
             return
-        limiter = self._limiters.get(host)
+        limiter = self._bucket(channel).get(host)
         if limiter is not None:
             await limiter.observe(latency_s, status)
 
@@ -438,6 +519,8 @@ class WebClient:
         # 站点级代理覆盖仍优先于池. None = 未配置池, 行为与改造前完全一致.
         self._proxy_pool = proxy_pool
         self._fingerprints = _FingerprintPicker(_IMPERSONATE_OPTIONS)
+        # 拒收 HEAD 的 host: 这些 host 上的探测注定 405, 记下来让后续探测直接让路给 GET.
+        self._head_unsupported: set[str] = set()
         self._session = AsyncSession(
             max_clients=max_clients,
             verify=False,
@@ -448,9 +531,9 @@ class WebClient:
         # 日志给出进程默认指纹, 便于判断某站点是否按 TLS 指纹放行.
         logger.info("web client created", impersonate=self._fingerprints.default)
 
-    async def acquire(self, url: str) -> None:
+    async def acquire(self, url: str, *, channel: RateChannel = RateChannel.page) -> None:
         """按 host 取得限速许可. 供不经 ``request`` 的通道 (浏览器渲染 / solver) 复用同一限速."""
-        await self._limiters.get(httpx.URL(url).host).acquire()
+        await self._limiters.get(httpx.URL(url).host, channel=channel).acquire()
 
     def _proxy_for(self, host: str | None, *, exclude: frozenset[str] | None = None) -> str | None:
         """该 host 实际使用的代理: 站点级设定优先, 含显式直连 (值为 ``None``).
@@ -495,8 +578,11 @@ class WebClient:
         max_attempts: int | None = None,
         bypass_circuit: bool = False,
         bypass_cache: bool = False,
+        channel: RateChannel = RateChannel.page,
     ) -> Response:
         """``ok_statuses`` 额外视为成功 (例如 RSS 304), 不重试、不当失败. 重试用尽后抛 ``RequestError``.
+
+        ``channel`` 选择限速桶: 页面抓取用 ``page``, 资源下载用 ``image`` (见 ``RateChannel``).
 
         ``max_retries`` 是首次请求之外的**重试次数** (``2`` → 最多发 3 次请求); ``max_attempts`` 是
         **总尝试次数** 上限, 供一次性的探测向下覆盖 (探测传 1 表示只发一次). 两者都至少发一次请求,
@@ -515,7 +601,7 @@ class WebClient:
         """
         host = httpx.URL(url).host
         headers = _with_same_origin_referer(host, headers, self._same_origin_referer_hosts)
-        await self._limiters.get(host).acquire()
+        await self._limiters.get(host, channel=channel).acquire()
 
         key = host or url
         t0 = time.monotonic()
@@ -618,7 +704,7 @@ class WebClient:
                     self._record_exchange(method, url, resp=resp, error=None, t0=t0)
                     await self._connectivity_success(host_key, proxy_key)
                     # 自适应限速 (P2-⑥): 成功结局也上报, 驱动恢复/减速决策.
-                    await self._limiters.observe(host, time.monotonic() - t0, resp.status_code)
+                    await self._limiters.observe(host, time.monotonic() - t0, resp.status_code, channel=channel)
                     return resp
 
                 failure = RequestFailure(
@@ -676,7 +762,7 @@ class WebClient:
                         impersonate=rotated,
                     )
                     # 轮换重发是同一 host 的额外请求, 与首次请求一样先取限速许可: 严格平滑桶不允许突发.
-                    await self._limiters.get(host).acquire()
+                    await self._limiters.get(host, channel=channel).acquire()
                     continue
 
             if not should_retry or retries >= attempts - 1:
@@ -705,7 +791,7 @@ class WebClient:
         )
         self._record_exchange(method, url, resp=resp, error=failure.message if failure else None, t0=t0, attempts=sent)
         # 自适应限速 (P2-⑥): 429/5xx/连接错误在此汇总成一次观测 (重试过程中的中间状态见日志).
-        await self._limiters.observe(host, time.monotonic() - t0, failure.status if failure else None)
+        await self._limiters.observe(host, time.monotonic() - t0, failure.status if failure else None, channel=channel)
         raise RequestError(url, failure)
 
     def _store_response(self, cache_key: tuple, url: str, resp: Response) -> None:
@@ -832,9 +918,12 @@ class WebClient:
         headers: dict[str, str] | None = None,
         cookies: dict[str, str] | None = None,
         use_proxy: bool = True,
+        channel: RateChannel = RateChannel.page,
     ) -> bytes:
         with skip_body_recording():
-            resp = await self.request("GET", url, headers=headers, cookies=cookies, use_proxy=use_proxy)
+            resp = await self.request(
+                "GET", url, headers=headers, cookies=cookies, use_proxy=use_proxy, channel=channel
+            )
         return resp.content
 
     async def post_text(
@@ -877,42 +966,81 @@ class WebClient:
                 url, RequestFailure(kind=FailureKind.UNEXPECTED, message=f"JSON parse error: {e}")
             ) from e
 
-    async def _probe(self, url: str, *, use_proxy: bool) -> tuple[int | None, str]:
-        """HEAD 探测 Content-Length 与重定向终址; 探测失败时终址回退为 ``url``."""
+    async def _probe(self, url: str, *, use_proxy: bool, channel: RateChannel = RateChannel.page) -> ProbeResult:
+        """HEAD 探测 Content-Length 与重定向终址; 探测失败时终址回退为 ``url``.
+
+        该 host 上一次探测被 405 拒收时直接返回空结果: 再发一次同样的 HEAD 只是白付一次请求.
+        """
+        host = httpx.URL(url).host
+        if host is not None and host in self._head_unsupported:
+            return ProbeResult(size=None, final_url=url)
         try:
-            resp = await self.request("HEAD", url, use_proxy=use_proxy)
+            resp = await self.request("HEAD", url, use_proxy=use_proxy, channel=channel)
         except RequestError:
-            return None, url
+            return ProbeResult(size=None, final_url=url)
         final_url = str(resp.url) if resp.url else url
+        if resp.status_code == 405 and host is not None:
+            self._head_unsupported.add(host)
+            logger.debug("host rejects HEAD, probing skipped from now on", host=host)
         if resp.status_code >= 400:
-            return None, final_url
+            return ProbeResult(size=None, final_url=final_url)
         cl = resp.headers.get("Content-Length")
         try:
-            return (int(cl) if cl else None), final_url
+            return ProbeResult(size=int(cl) if cl else None, final_url=final_url)
         except ValueError, TypeError:
-            return None, final_url
+            return ProbeResult(size=None, final_url=final_url)
+
+    async def probe(self, url: str, *, use_proxy: bool = True, channel: RateChannel = RateChannel.page) -> ProbeResult:
+        """HEAD 探测的公开入口: 一次请求同时给出 Content-Length 与重定向终址.
+
+        需要「先看大小再决定怎么下」的调用方应在探测后把结果传给 ``download(probe=...)``,
+        否则 ``download`` 会再探一次同一个 URL.
+        """
+        return await self._probe(url, use_proxy=use_proxy, channel=channel)
 
     async def get_filesize(self, url: str, *, use_proxy: bool = True) -> int | None:
-        size, _ = await self._probe(url, use_proxy=use_proxy)
-        return size
+        result = await self._probe(url, use_proxy=use_proxy)
+        return result.size
 
     async def resolve_final_url(self, url: str, *, use_proxy: bool = True) -> str:
         """跟随重定向后的终址; 探测失败时返回 ``url``.
 
         调用方据此判定上游是否改派了别的资源 (如占位图).
         """
-        _, final_url = await self._probe(url, use_proxy=use_proxy)
-        return final_url
+        result = await self._probe(url, use_proxy=use_proxy)
+        return result.final_url
 
-    async def download(self, url: str, dest: Path, *, use_proxy: bool = True) -> bool:
-        """下载. 分块阈值、分片大小与并发数取自 ``network`` 配置. 失败返回 False, 并按状态与原因记日志."""
-        file_size, _ = await self._probe(url, use_proxy=use_proxy)
+    async def download(
+        self,
+        url: str,
+        dest: Path,
+        *,
+        use_proxy: bool = True,
+        channel: RateChannel = RateChannel.page,
+        probe: ProbeResult | None = None,
+        probe_first: bool = True,
+        accept_final_url: Callable[[str], bool] | None = None,
+    ) -> bool:
+        """下载. 分块阈值、分片大小与并发数取自 ``network`` 配置. 失败返回 False, 并按状态与原因记日志.
 
-        if file_size and file_size > self._chunked_threshold:
-            return await self._download_chunked(url, dest, file_size, use_proxy=use_proxy)
+        ``probe`` 为调用方已做过的 HEAD 探测结果, 传了就省掉这次重复探测.
+
+        ``probe_first=False`` 用于「必然走整份读取」的资源 (图片): 不预先 HEAD, 直接 GET.
+        实测图片管线原本每个 URL 要发 2 次 HEAD + 1 次 GET, 而 HEAD 只用来判分片与占位图 ——
+        这类资源两样都不需要, 探测纯属白付.
+
+        ``accept_final_url`` 在 GET 之后用跟随重定向后的终址做一次判定, 拒收时 (如上游改派了
+        占位图) 不写 ``dest`` 并返回 False. 每个 URL 都以独立临时文件落盘, 因此这里留下半成品
+        不会污染最终路径.
+        """
+        if probe_first:
+            probed = probe if probe is not None else await self._probe(url, use_proxy=use_proxy, channel=channel)
+            if probed.size and probed.size > self._chunked_threshold:
+                return await self._download_chunked(url, dest, probed.size, use_proxy=use_proxy, channel=channel)
 
         try:
-            content = await self.get_bytes(url, use_proxy=use_proxy)
+            with skip_body_recording():
+                resp = await self.request("GET", url, use_proxy=use_proxy, channel=channel)
         except RequestError as e:
             logger.error(
                 "download failed",
@@ -923,16 +1051,30 @@ class WebClient:
             )
             return False
 
+        if accept_final_url is not None:
+            final_url = str(resp.url) if resp.url else url
+            if not accept_final_url(final_url):
+                logger.warning("download rejected by final url", url=url, final_url=final_url)
+                return False
+
         try:
             dest.parent.mkdir(parents=True, exist_ok=True)
             async with aiofiles.open(dest, "wb") as f:
-                await f.write(content)
+                await f.write(resp.content)
             return True
         except Exception as e:
             logger.error("file write failed", path=str(dest), error=str(e))
             return False
 
-    async def _download_chunked(self, url: str, dest: Path, file_size: int, *, use_proxy: bool = True) -> bool:
+    async def _download_chunked(
+        self,
+        url: str,
+        dest: Path,
+        file_size: int,
+        *,
+        use_proxy: bool = True,
+        channel: RateChannel = RateChannel.page,
+    ) -> bool:
         chunk_size = self._chunk_size
         parts = [(s, min(s + chunk_size - 1, file_size - 1)) for s in range(0, file_size, chunk_size)]
 
@@ -952,7 +1094,7 @@ class WebClient:
             async with semaphore:
                 try:
                     resp = await self.request(
-                        "GET", url, headers={"Range": f"bytes={start}-{end}"}, use_proxy=use_proxy
+                        "GET", url, headers={"Range": f"bytes={start}-{end}"}, use_proxy=use_proxy, channel=channel
                     )
                 except RequestError as e:
                     return e.failure or RequestFailure(kind=FailureKind.UNEXPECTED, message=e.message)

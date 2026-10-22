@@ -242,6 +242,7 @@ class TestScrapeHandler:
         finally:
             recorder.close()
         assert result.success is False
+        assert media.id is not None
         updated = await repo.get_media_file(media.id)
         assert updated is not None
         assert updated.status == MediaFileStatus.PENDING  # 关键: 失败不把状态推离 PENDING
@@ -416,6 +417,12 @@ class TestScrapeHandler:
                 dest.parent.mkdir(parents=True, exist_ok=True)
                 Image.new("RGB", self.sizes[url], "blue").save(dest)
                 return True
+
+            async def download_resource(self, url, dest, **kwargs) -> str:
+                """单次 GET 落盘并返回终址; 图片管线走这条而非分块 download."""
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                Image.new("RGB", self.sizes[url], "blue").save(dest)
+                return url
 
             async def get_filesize(self, url, **kwargs):
                 return None
@@ -1138,6 +1145,7 @@ class TestRefreshHandler:
         finally:
             rec.close()
         assert failed.success is False
+        assert media.id is not None
         after_fail = await repo.get_media_file(media.id)
         assert after_fail is not None and after_fail.status == MediaFileStatus.PENDING
 
@@ -1253,7 +1261,8 @@ class TestRefreshHandlerDisabledInjection:
     @pytest.mark.asyncio(loop_scope="function")
     async def test_injects_disabled_sources(self, repo: Repository, tmp_path: Path):
         (tmp_path / "MIDV-123.mp4").write_bytes(b"\x00" * 100)
-        handler = RefreshHandler(repo=repo, availability=_StubAvailability({"javdb"}))
+        # 鸭子类型替身: 只实现 handler 用到的 disabled_sources, 不构造完整探测依赖.
+        handler = RefreshHandler(repo=repo, availability=_StubAvailability({"javdb"}))  # type: ignore[arg-type]
         result = await handler.handle(RefreshPayload(library_id=1, path=str(tmp_path)))
         assert result.success is True
         scrapes = [f for f in (result.followups or []) if f.task_type == TaskType.SCRAPE]

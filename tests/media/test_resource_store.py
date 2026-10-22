@@ -328,7 +328,7 @@ class TestResolveSource:
         assert src is not None
         assert src.locator == _REQUEST
         assert src.path.read_bytes() == b"jpeg-bytes"
-        assert session.methods[0] == "HEAD"
+        assert session.methods == ["GET"]  # 小资源单次 GET: 不预先 HEAD 探测
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("url", ["data:image/png;base64,AAAA", "ftp://host/img.jpg", "img.jpg", ""])
@@ -401,7 +401,7 @@ class TestPlaceholderRedirect:
         client, session = _stub_client(monkeypatch, final_url=_PLACEHOLDER, content=b"placeholder-bytes")
 
         assert await resource_store.acquire(_REQUEST, client) is None
-        assert session.methods == ["HEAD"]  # 只探测, 不下载
+        assert session.methods == ["GET"]  # 终址由 GET 的响应自身给出, 取回后拒收
         assert await resource_store.get_by_url(_REQUEST) is None
 
     @pytest.mark.asyncio
@@ -414,7 +414,7 @@ class TestPlaceholderRedirect:
         path = await resource_store.acquire(_REQUEST, client)
 
         assert path is not None and path.read_bytes() == b"jpeg-bytes"
-        assert session.methods[0] == "HEAD" and "GET" in session.methods
+        assert session.methods == ["GET"]  # 单次 GET, 不再先探测
         record = await resource_store.get_by_url(_REQUEST)
         assert record is not None
         assert record.size == resource_store.full_path(record).stat().st_size
@@ -443,7 +443,8 @@ class TestAcquireFailure:
         assert not dest.exists()
         assert _siblings(dest) == []  # 下载用的临时文件也已清理
         assert await resource_store.get_by_url(_REQUEST) is None
-        assert session.methods[0] == "HEAD" and "GET" in session.methods
+        # 单次 GET 起步, 失败按可重试状态再试; 全程不探测 (没有 HEAD).
+        assert session.methods[0] == "GET" and "HEAD" not in session.methods
 
     @pytest.mark.asyncio
     async def test_partial_download_is_removed(self, resource_store: ResourceStore, monkeypatch: pytest.MonkeyPatch):

@@ -28,10 +28,11 @@ rem    7. echo 里的 ^ 只转义紧跟的一个字符。写 ^-> 时 ^> 没被转义, > 仍是重定向,
 rem       会把后面那个路径当输出文件截断。箭头一律用纯文本, 不写尖括号。
 rem
 rem  用法:
-rem    start.bat           启动开发环境, API :8000 与前端 :5173
+rem    start.bat           双击即生产模式, 构建后由服务端托管 SPA http://127.0.0.1:8000
+rem    start.bat start     同无参数, 显式生产模式
+rem    start.bat dev       开发环境, API :8000 与前端 :5173 热更新
 rem    start.bat setup     仅同步依赖并初始化环境
 rem    start.bat build     导出 OpenAPI 并构建前端产物
-rem    start.bat start     构建后以生产模式启动服务端 :8000
 rem    start.bat check     全量检查: lint / 类型 / 前端 / 测试
 rem    start.bat test      运行 pytest
 rem    start.bat doctor    诊断: 工具来源 / 依赖 / 端口 逐项体检
@@ -69,7 +70,7 @@ set "TOOLS=%ROOT%\tools"
 set "PNPM_VER=11.28.6"
 
 set "ACTION=%~1"
-if "%ACTION%"=="" set "ACTION=dev"
+if "%ACTION%"=="" set "ACTION=start"
 
 echo.
 echo   Amane - 环境准备中...
@@ -289,6 +290,10 @@ goto :done
 :start_failed
 echo.
 echo   [错误] 生产模式启动失败, 退出码 !RC!
+echo   常见原因:
+echo     1. 前端类型检查或构建失败, 看上方 tsc 或 vite 报错
+echo     2. 依赖未同步或已损坏, 试运行: start.bat setup
+echo   只想先看界面、不想等构建, 可改用开发模式: start.bat dev
 echo   诊断: start.bat doctor
 goto :fail
 

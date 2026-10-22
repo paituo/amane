@@ -138,6 +138,8 @@ def build_network_stack(
         default_rate=hot.network.default_rate_limit,
         adaptive=hot.network.adaptive_rate_limit,
         floor_ratio=hot.network.adaptive_rate_floor_ratio,
+        image_rate_limits=hot.network.image_rate_limits,
+        image_default_rate=hot.network.image_default_rate_limit,
     )
     # P2-⑦ 多代理池: 仅在 network.proxies 非空时启用; 池与熔断器共享 proxy:<url> 键,
     # 开路代理不被选中, 冷却后半开探针自动回池. 未配置池时行为与改造前完全一致.
@@ -755,6 +757,7 @@ def build_handlers(
         device_id_path=None if state_dir is None else state_dir / DEVICE_ID_FILENAME,
         system_prompt=hot.llm.system_prompt,
         field_prompts=hot.llm.field_prompts,
+        skip_keywords=hot.llm.skip_keywords,
         cache=translation_cache,
     )
     if library_locks is None:

@@ -12,6 +12,7 @@ from amane.config import HotSettings, SrConfig
 from amane.enums import DownloadableResource
 from amane.media import CropRotation, ResourceStore, manual_crop_image, materialize_images
 from amane.media import pipeline as pipeline_mod
+from amane.net.http import ProbeResult
 from tests.helpers import LOAD_TOLERANT_TIMEOUT, await_for
 
 if TYPE_CHECKING:
@@ -52,6 +53,10 @@ class FakeClient:
             exif[274] = orientation
             img.save(dest, exif=exif)
         return True
+
+    async def probe(self, url: str, **kwargs) -> ProbeResult:
+        # 只有预告片这类大资源会先探测大小; 伪实现报「大小未知」, 于是走整份读取.
+        return ProbeResult(size=None, final_url=url)
 
     async def get_filesize(self, url: str, **kwargs) -> int | None:
         return None
@@ -183,6 +188,9 @@ class _GatedClient:
         dest.parent.mkdir(parents=True, exist_ok=True)
         Image.new("RGB", self._sizes[url], "blue").save(dest)
         return True
+
+    async def probe(self, url: str, **kwargs: object) -> ProbeResult:
+        return ProbeResult(size=None, final_url=url)
 
     async def get_filesize(self, url: str, **kwargs: object) -> int | None:
         return None

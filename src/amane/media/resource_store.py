@@ -21,6 +21,7 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from ..db.models import Resource
+from ..net.http import RateChannel
 
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, Awaitable, Callable
@@ -165,7 +166,12 @@ class ResourceStore:
 
             return full_path
 
-    async def acquire(self, url: str, client: WebClient) -> Path | None:
+    async def acquire(self, url: str, client: WebClient, *, expect_large: bool = False) -> Path | None:
+        """取到本地文件路径; ``expect_large`` 标记该 URL 可能是大文件 (预告片/压缩包).
+
+        默认按「小资源」处理: 一次 GET 就够, 不预先 HEAD 探测. 只有确实可能是大文件时
+        才值得先探 Content-Length 以决定是否分片下载.
+        """
         # 内部 URL 是对既有 Resource 的引用: 直接解析本地文件, 不下载也不写记录.
         internal = internal_url_hash(url)
         if internal is not None:
@@ -175,33 +181,55 @@ class ResourceStore:
         # 同一 URL 的内容写入串行: 一起到达的调用都判缓存未命中, 若各自下载并改名到同一路径,
         # 后写会覆盖先写 (含先写方刚做完的就地超分), 而先写方的记录仍然作数.
         async with self._serialized(url):
-            return await self._acquire_locked(url, client)
+            return await self._acquire_locked(url, client, expect_large=expect_large)
 
-    async def _acquire_locked(self, url: str, client: WebClient) -> Path | None:
+    async def _acquire_locked(self, url: str, client: WebClient, *, expect_large: bool = False) -> Path | None:
         # 缓存命中且文件存在则直出. 判据是记录 + 文件存在, 不看哈希: 超分是就地覆盖, 哈希每次都会变.
         cached = await self.resolve(url)
         if cached:
             return cached
 
-        # 上游改派占位图时跳过, 不占用 dest 也不写记录.
-        final_url = await client.resolve_final_url(url)
-        if _is_placeholder_url(final_url):
-            logger.warning("resource is upstream placeholder", url=url, final_url=final_url)
-            return None
-
-        dest = self._compute_path(url)
-        dest.parent.mkdir(parents=True, exist_ok=True)
-
-        # 下载. 失败可能是站点拦下指纹 (403/406, 见 net/http.py 的轮换), 也可能是上游本来就没有图;
-        # 两种失败都不写资源记录, 这里给出资源层的告警, 与上游的请求级日志区分开.
-        #
         # 临时文件按调用命名, 分块下载失败留下的残片只落在其中; 成功后原子改名到 dest, 失败只清理
         # 临时文件, 不触碰 dest (dest 只由 URL 决定, 而这里已按 URL 串行, 改名不会被并发写覆盖).
         # 临时文件保留原扩展名: download 的实现可能按扩展名决定写出的格式.
+        dest = self._compute_path(url)
+        dest.parent.mkdir(parents=True, exist_ok=True)
         tmp = dest.with_name(f"{dest.stem}.{uuid4().hex}.part{dest.suffix}")
+
+        # 上游改派占位图时跳过, 不占用 dest 也不写记录.
+        # 小资源走单次 GET: 终址由响应自身给出, 因此占位判定放在取回之后 —— 多花的是占位图那点字节,
+        # 换来的是每个图片 URL 少发两次 HEAD. 大资源先探测, 避免把整份内容读进内存才发现是占位图.
+        final_url: str | None = None
+
+        def _screen(final: str) -> bool:
+            nonlocal final_url
+            final_url = final
+            return not _is_placeholder_url(final)
+
         try:
-            if not await client.download(url, tmp):
-                logger.warning("resource download failed", url=url, host=urlsplit(url).hostname)
+            if expect_large:
+                probe = await client.probe(url, channel=RateChannel.image)
+                if _is_placeholder_url(probe.final_url):
+                    logger.warning("resource is upstream placeholder", url=url, final_url=probe.final_url)
+                    return None
+                final_url = probe.final_url
+                ok = await client.download(url, tmp, channel=RateChannel.image, probe=probe)
+            else:
+                ok = await client.download(
+                    url,
+                    tmp,
+                    channel=RateChannel.image,
+                    probe_first=False,
+                    accept_final_url=_screen,
+                )
+
+            if not ok:
+                # 失败可能是站点拦下指纹 (403/406, 见 net/http.py 的轮换), 也可能是上游本来就没有图;
+                # 两种失败都不写资源记录, 这里给出资源层的告警, 与上游的请求级日志区分开.
+                if final_url is not None and _is_placeholder_url(final_url):
+                    logger.warning("resource is upstream placeholder", url=url, final_url=final_url)
+                else:
+                    logger.warning("resource download failed", url=url, host=urlsplit(url).hostname)
                 return None
             tmp.replace(dest)
         finally:
