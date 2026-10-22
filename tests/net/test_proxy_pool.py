@@ -4,6 +4,8 @@
 use_proxy=False 不碰池、未配池时行为与改造前一致.
 """
 
+from typing import Any
+
 import pytest
 from curl_cffi import CurlError
 
@@ -33,10 +35,12 @@ class _ProxyAwareSession:
         self.failures = dict(failures or {})
         self.calls: list[dict] = []
 
-    async def request(self, method: str, url: str, **kwargs):
+    async def request(self, method: str, url: str, **kwargs: Any):
         proxy = kwargs.get("proxy")
-        self.calls.append({"method": method, "url": url, "proxy": proxy})
-        exc = self.failures.get(proxy)
+        # use_proxy=False 时客户端传 proxy=None, 归一成 None 键再查失败表, 避免把非字符串值当代理.
+        proxy_key = proxy if isinstance(proxy, str) else None
+        self.calls.append({"method": method, "url": url, "proxy": proxy_key})
+        exc = self.failures.get(proxy_key) if proxy_key is not None else None
         if exc is not None:
             raise exc
         return _StubResponse(url=url, content=b"ok")

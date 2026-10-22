@@ -231,6 +231,7 @@ class TestScrapeHandler:
         )
         media = await repo.create_media_file(library_id=1, path="/media/TEST-001.mp4")
         assert media.status == MediaFileStatus.PENDING
+        assert media.id is not None
         recorder = Recorder.begin(
             tmp_path, Task(id=95, type=TaskType.SCRAPE, status=TaskStatus.RUNNING, payload={}), HotSettings()
         )
@@ -1118,6 +1119,7 @@ class TestRefreshHandler:
 
         media = await repo.get_media_file_by_path(str(video))
         assert media is not None and media.status == MediaFileStatus.PENDING
+        assert media.id is not None
 
         # 模拟该 SCRAPE 失败 (无可用元数据).
         empty_h = ScrapeHandler(
@@ -1211,6 +1213,7 @@ class TestScrapeHandlerDisabledSources:
             recorder.close()
 
         assert result.success is True
+        assert result.result is not None
         # dmm 被跳过, 不应被请求; javdb 仍被请求并取到数据.
         assert tally == {"javdb": 1, "dmm": 0}
         outcomes = {(o.site, str(o.outcome)) for o in result.result.outcomes}

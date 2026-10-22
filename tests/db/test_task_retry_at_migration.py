@@ -18,8 +18,15 @@ def alembic_cfg(tmp_path: Path) -> Config:
     return alembic_config(tmp_path / "migrate.db")
 
 
+def _db_url(cfg: Config) -> str:
+    """取迁移库连接串; 夹具 ``alembic_config`` 必然写入 url, 空值属夹具错误, 直接断言."""
+    url = cfg.get_main_option("sqlalchemy.url")
+    assert url, "alembic 配置缺少 sqlalchemy.url"
+    return url
+
+
 def _columns(cfg: Config) -> set[str]:
-    engine = create_engine(cfg.get_main_option("sqlalchemy.url"))
+    engine = create_engine(_db_url(cfg))
     try:
         return {col["name"] for col in inspect(engine).get_columns("tasks")}
     finally:
@@ -27,7 +34,7 @@ def _columns(cfg: Config) -> set[str]:
 
 
 def _insert_task(cfg: Config) -> int:
-    engine = create_engine(cfg.get_main_option("sqlalchemy.url"))
+    engine = create_engine(_db_url(cfg))
     try:
         with engine.begin() as conn:
             result = conn.execute(
@@ -42,7 +49,7 @@ def _insert_task(cfg: Config) -> int:
 
 
 def _read_retry_at(cfg: Config, task_id: int) -> Any:
-    engine = create_engine(cfg.get_main_option("sqlalchemy.url"))
+    engine = create_engine(_db_url(cfg))
     try:
         with engine.begin() as conn:
             return conn.execute(text("SELECT retry_at FROM tasks WHERE id = :id"), {"id": task_id}).scalar_one()
@@ -60,7 +67,7 @@ def test_retry_at_added_as_nullable(alembic_cfg: Config) -> None:
     assert "retry_at" in _columns(alembic_cfg)
     assert _read_retry_at(alembic_cfg, task_id) is None, "存量行必须回读为 NULL (立即可认领)"
 
-    engine = create_engine(alembic_cfg.get_main_option("sqlalchemy.url"))
+    engine = create_engine(_db_url(alembic_cfg))
     try:
         with engine.begin() as conn:
             conn.execute(

@@ -7,7 +7,7 @@ import structlog
 from ..db import TaskType
 from ..library import MEDIA_EXTENSIONS, InventoryStore, LibraryHit, LibraryScan, OrphanScan, scan_inventory
 from ..parsing import parse_file_info
-from ..scrape_availability import SourceAvailability
+from ..scrape_availability import DisabledSourcesProbe
 from ..utils.path import nfc_path
 from ..utils.threads import path_exists, path_is_dir
 from ._common import register_media_file
@@ -31,7 +31,7 @@ class RefreshHandler(TaskHandler[RefreshPayload, RefreshResult]):
         repo: Repository,
         media_extensions: Sequence[str] | None = None,
         inventory_store: InventoryStore | None = None,
-        availability: SourceAvailability | None = None,
+        availability: DisabledSourcesProbe | None = None,
     ):
         super().__init__(payload_t=RefreshPayload, result_t=RefreshResult)
         self._repo = repo
@@ -137,7 +137,9 @@ class RefreshHandler(TaskHandler[RefreshPayload, RefreshResult]):
 
         # 扇出 SCRAPE 前先做一次批次级可用性探测 (结果按 TTL 缓存): 把不可用的来源一次性写进所有派生任务,
         # 避免每个 SCRAPE 各自建图后还去请求死站 (配合 WebClient 熔断器的请求级短路).
-        disabled = await self._availability.disabled_sources() if self._availability is not None else frozenset()
+        disabled: frozenset[str] = (
+            await self._availability.disabled_sources() if self._availability is not None else frozenset()
+        )
 
         # 扇出 SCRAPE; 只描述后继, 由完成事务创建.
         followups = []
@@ -154,7 +156,7 @@ class RefreshHandler(TaskHandler[RefreshPayload, RefreshResult]):
                         number=parsed.number,
                         content_type=parsed.content_type,
                         use_cache=payload.use_cache,
-                        disabled_sources=disabled,
+                        disabled_sources=set(disabled),
                     ).model_dump(mode="json"),
                 )
             )

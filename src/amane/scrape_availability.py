@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol
 
 import structlog
 
@@ -38,6 +38,16 @@ _DEFAULT_TTL_S = 180.0
 
 # 探测异常 (取实例失败 / 检查器抛错) 后的重试间隔: 避免每次扇出都重启一轮注定失败的探测.
 _RETRY_BACKOFF_S = 30.0
+
+
+class DisabledSourcesProbe(Protocol):
+    """扇出路径只需要这一点能力: 读当前被判不可用的 source_id 集合.
+
+    用结构化类型而不是绑定 :class:`SourceAvailability`, 是因为构造后者需要爬虫工厂与热配置;
+    REFRESH / RESCRAPE 的派生逻辑只关心「哪些来源该跳过」, 测试注入极简替身即可.
+    """
+
+    async def disabled_sources(self) -> frozenset[str]: ...
 
 
 class SourceAvailability:

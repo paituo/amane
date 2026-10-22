@@ -71,6 +71,13 @@ def _client(
     )
 
 
+def _cache_of(client: WebClient) -> ResponseCache:
+    """取客户端上的缓存实例, 兼作非空断言 (WebClient 允许不启用缓存)."""
+    cache = client._response_cache
+    assert cache is not None, "该用例要求客户端启用响应缓存"
+    return cache
+
+
 # --- ResponseCache 单元 -----------------------------------------------------
 
 
@@ -206,9 +213,9 @@ class TestWebClientResponseCache:
         session = _StubSession(_StubResponse(content=b"x"))
         monkeypatch.setattr(client, "_session", session)
 
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
         await client.request("GET", "https://example.com/x")
-        assert len(client._response_cache) == 1  # 2xx 文本响应已写入
+        assert len(_cache_of(client)) == 1  # 2xx 文本响应已写入
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_post_not_cached(self, monkeypatch: pytest.MonkeyPatch):
@@ -220,7 +227,7 @@ class TestWebClientResponseCache:
         await client.request("POST", "https://example.com/x", data={"a": "1"})
 
         assert len(session.calls) == 2
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_range_not_cached(self, monkeypatch: pytest.MonkeyPatch):
@@ -232,7 +239,7 @@ class TestWebClientResponseCache:
         await client.request("GET", "https://example.com/x", headers={"Range": "bytes=0-4"})
 
         assert len(session.calls) == 2
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_large_body_not_cached(self, monkeypatch: pytest.MonkeyPatch):
@@ -244,7 +251,7 @@ class TestWebClientResponseCache:
         await client.request("GET", "https://example.com/x")
         await client.request("GET", "https://example.com/x")
 
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
         assert len(session.calls) == 2
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -256,7 +263,7 @@ class TestWebClientResponseCache:
         await client.request("GET", "https://example.com/cover.jpg")
         await client.request("GET", "https://example.com/cover.jpg")
 
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
         assert len(session.calls) == 2
 
     @pytest.mark.asyncio(loop_scope="function")
@@ -268,7 +275,7 @@ class TestWebClientResponseCache:
         with pytest.raises(http.RequestError):
             await client.request("GET", "https://example.com/x")
 
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_bypass_circuit_skips_cache(self, monkeypatch: pytest.MonkeyPatch):
@@ -280,7 +287,7 @@ class TestWebClientResponseCache:
         await client.request("GET", "https://example.com/x", bypass_circuit=True)
 
         assert len(session.calls) == 2
-        assert len(client._response_cache) == 0
+        assert len(_cache_of(client)) == 0
 
     @pytest.mark.asyncio(loop_scope="function")
     async def test_bypass_cache_force_refresh(self, monkeypatch: pytest.MonkeyPatch):
@@ -289,7 +296,7 @@ class TestWebClientResponseCache:
         monkeypatch.setattr(client, "_session", session)
 
         await client.request("GET", "https://example.com/x")  # 写入缓存
-        assert len(client._response_cache) == 1
+        assert len(_cache_of(client)) == 1
         r2 = await client.request("GET", "https://example.com/x", bypass_cache=True)  # 强制刷新, 跳过缓存
 
         assert r2.content == b"v1"
