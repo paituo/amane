@@ -69,6 +69,29 @@ class LLMAuthMode(StrEnum):
     GUEST_TOKEN = "guest_token"
 
 
+class LLMFailureKind(StrEnum):
+    """LLM 请求失败的类别. 只有 ``transient`` 值得再试.
+
+    ``content_policy`` 是上游内容审核拒绝: 同样的文本再发一次必然还被拒, 重试只是白等;
+    ``auth`` / ``bad_request`` 同样是确定性失败, 换时机也不会好.
+    """
+
+    CONTENT_POLICY = "content_policy"
+    """请求被上游内容审核拒绝 (4xx 且正文给出审核类错误码/文案)."""
+
+    AUTH = "auth"
+    """401/403: 凭据或权限问题."""
+
+    BAD_REQUEST = "bad_request"
+    """其余 4xx: 请求本身不被接受 (模型名、参数、上下文长度等)."""
+
+    TRANSIENT = "transient"
+    """5xx / 408 / 429 / 超时 / 连接失败: 换个时机可能成功."""
+
+    UNKNOWN = "unknown"
+    """无法归类的异常."""
+
+
 class ActorGender(StrEnum):
     """演员性别 - 用于展示与按站裁剪刮削源."""
 

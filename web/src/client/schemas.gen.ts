@@ -3545,6 +3545,8 @@ export const HotSettingsSchema = {
                 chunk_size: 1048576,
                 concurrency: 10,
                 rate_limits: {},
+                image_rate_limits: {},
+                image_default_rate_limit: 10,
                 default_rate_limit: 5,
                 response_cache_ttl_s: 300,
                 response_cache_max_entries: 256,
@@ -3595,7 +3597,8 @@ export const HotSettingsSchema = {
                 api_type: 'chat',
                 base_url: 'https://api.openai.com/v1',
                 model: '',
-                rate_limit: 2
+                rate_limit: 2,
+                skip_keywords: []
             }
         },
         search: {
@@ -4113,6 +4116,13 @@ export const LLMConfigSchema = {
             minimum: 0.1,
             title: 'Rate Limit',
             default: 2
+        },
+        skip_keywords: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Skip Keywords'
         }
     },
     type: 'object',
@@ -6216,6 +6226,20 @@ export const NetworkConfigSchema = {
             },
             type: 'object',
             title: 'Rate Limits'
+        },
+        image_rate_limits: {
+            additionalProperties: {
+                type: 'number'
+            },
+            type: 'object',
+            title: 'Image Rate Limits'
+        },
+        image_default_rate_limit: {
+            type: 'number',
+            maximum: 100,
+            minimum: 0.1,
+            title: 'Image Default Rate Limit',
+            default: 10
         },
         default_rate_limit: {
             type: 'number',

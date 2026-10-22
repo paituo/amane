@@ -569,6 +569,14 @@
       "host_circuit_cooldown_s": {
         "label": "Site Circuit Cooldown",
         "description": "Seconds a paused site waits before one probe is let through"
+      },
+      "image_rate_limits": {
+        "label": "Image Rate Limits",
+        "description": "Per-host rate limit for image downloads, independent of page requests, so fetching images is not throttled by the site's page rate"
+      },
+      "image_default_rate_limit": {
+        "label": "Default Image Rate Limit",
+        "description": "Image download rate for hosts without an explicit entry"
       }
     },
     "worker": {
@@ -714,6 +722,10 @@
       },
       "rate_limit": {
         "label": "Max requests per second"
+      },
+      "skip_keywords": {
+        "label": "Skip Keywords",
+        "description": "Texts containing any of these keywords are kept as-is without calling the model; use it for material the upstream content filter always rejects"
       },
       "translate_fields": {
         "label": "Fields to Translate",

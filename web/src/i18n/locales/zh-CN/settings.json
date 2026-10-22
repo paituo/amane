@@ -569,6 +569,14 @@
       "host_circuit_cooldown_s": {
         "label": "站点熔断冷却",
         "description": "站点被暂停后等待多少秒再放行一次探测"
+      },
+      "image_rate_limits": {
+        "label": "图片限速",
+        "description": "按 Host 限制图片下载速率, 与页面抓取互不影响; 同一域名下取图不再被页面速率拖慢"
+      },
+      "image_default_rate_limit": {
+        "label": "图片默认限速",
+        "description": "未单独设置的域名默认的图片下载速率"
       }
     },
     "worker": {
@@ -714,6 +722,10 @@
       },
       "rate_limit": {
         "label": "每秒请求上限"
+      },
+      "skip_keywords": {
+        "label": "跳过翻译的限定词",
+        "description": "文本命中任一关键词时不调用模型, 直接保留原文; 用于绕开上游内容审核必定拒绝的题材"
       },
       "translate_fields": {
         "label": "翻译字段",

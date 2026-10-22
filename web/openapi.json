@@ -9835,6 +9835,8 @@
               "chunk_size": 1048576,
               "concurrency": 10,
               "rate_limits": {},
+              "image_rate_limits": {},
+              "image_default_rate_limit": 10.0,
               "default_rate_limit": 5.0,
               "response_cache_ttl_s": 300.0,
               "response_cache_max_entries": 256,
@@ -9885,7 +9887,8 @@
               "api_type": "chat",
               "base_url": "https://api.openai.com/v1",
               "model": "",
-              "rate_limit": 2.0
+              "rate_limit": 2.0,
+              "skip_keywords": []
             }
           },
           "search": {
@@ -10394,6 +10397,13 @@
             "minimum": 0.1,
             "title": "Rate Limit",
             "default": 2.0
+          },
+          "skip_keywords": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skip Keywords"
           }
         },
         "type": "object",
@@ -12464,6 +12474,20 @@
             },
             "type": "object",
             "title": "Rate Limits"
+          },
+          "image_rate_limits": {
+            "additionalProperties": {
+              "type": "number"
+            },
+            "type": "object",
+            "title": "Image Rate Limits"
+          },
+          "image_default_rate_limit": {
+            "type": "number",
+            "maximum": 100.0,
+            "minimum": 0.1,
+            "title": "Image Default Rate Limit",
+            "default": 10
           },
           "default_rate_limit": {
             "type": "number",

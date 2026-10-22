@@ -4,18 +4,20 @@
 """
 
 import re
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import structlog
 import zhconv
 from aiolimiter import AsyncLimiter
-from httpx2 import AsyncClient, Timeout
+from httpx2 import AsyncClient, Timeout, TransportError
 from pydantic_ai.direct import model_request
+from pydantic_ai.exceptions import ModelHTTPError
 from pydantic_ai.messages import ModelMessage, ModelRequest, SystemPromptPart, UserPromptPart
 from pydantic_ai.models import Model
 
-from ..enums import ApiType, Language, LLMAuthMode, MetadataField
+from ..enums import ApiType, Language, LLMAuthMode, LLMFailureKind, MetadataField
 from ..utils.language import needs_llm_translation
 from .cache import TranslationCache
 from .guest_token import GUEST_API_KEY, GuestTokenAuth, load_or_create_device_id
@@ -25,6 +27,101 @@ logger = structlog.get_logger()
 
 _TIMEOUT = 60.0
 """LLM 请求超时 (秒). 重试由 SDK 按其默认策略承担, 翻译器不配置次数."""
+
+_CONTENT_POLICY_MARKERS: tuple[str, ...] = (
+    "1301",
+    "content_policy",
+    "content_filter",
+    "content management policy",
+    "系统检测到输入或生成内容",
+)
+"""上游内容审核拒绝的正文特征. 命中即判定为确定性失败: 同样的文本重发必然还被拒."""
+
+_RETRYABLE_STATUSES = frozenset({408, 425, 429, 500, 502, 503, 504})
+"""可恢复的状态码: 换个时机可能成功."""
+
+_GATE_THRESHOLD = 3
+"""连续多少次确定性失败后暂停翻译."""
+
+_GATE_COOLDOWN_S = 600.0
+"""暂停时长 (秒); 到期放行一个探针, 成功即复位."""
+
+
+def _body_text(body: object | None) -> str:
+    """把 ``ModelHTTPError.body`` 压成可检索的小写文本 (上游给的可能是 dict / str / 其它)."""
+    if body is None:
+        return ""
+    if isinstance(body, str):
+        return body.lower()
+    if isinstance(body, Mapping):
+        return " ".join(f"{k}={v}" for k, v in body.items()).lower()
+    return str(body).lower()
+
+
+def classify_llm_failure(exc: BaseException) -> LLMFailureKind:
+    """按「再试一次有没有意义」给 LLM 异常分类.
+
+    内容审核拒绝与鉴权/参数错误是确定性的: 同一 (端点, 模型, 文本) 重发只是重复等待,
+    所以单独归类, 交给 ``_DeterministicFailureGate`` 累计并短路后续请求.
+    """
+    if isinstance(exc, ModelHTTPError):
+        body = _body_text(exc.body)
+        if any(marker in body for marker in _CONTENT_POLICY_MARKERS):
+            return LLMFailureKind.CONTENT_POLICY
+        if exc.status_code in (401, 403):
+            return LLMFailureKind.AUTH
+        if exc.status_code in _RETRYABLE_STATUSES:
+            return LLMFailureKind.TRANSIENT
+        if 400 <= exc.status_code < 500:
+            return LLMFailureKind.BAD_REQUEST
+        return LLMFailureKind.TRANSIENT
+    if isinstance(exc, TimeoutError | TransportError):
+        return LLMFailureKind.TRANSIENT
+    return LLMFailureKind.UNKNOWN
+
+
+class _DeterministicFailureGate:
+    """连续确定性失败后暂停翻译一段时间 (与站点熔断同构).
+
+    上游对同类文本恒定拒绝时, 每个任务都会各自白等一次失败 (实测单次 11.7 s, 51.6% 的任务命中),
+    这里把这个「注定失败」信号升级成进程级的短期跳过; 冷却结束放行一个探针, 恢复即复位.
+    """
+
+    def __init__(
+        self,
+        threshold: int = _GATE_THRESHOLD,
+        cooldown_s: float = _GATE_COOLDOWN_S,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._threshold = threshold
+        self._cooldown_s = cooldown_s
+        self._clock = clock
+        self._failures = 0
+        self._open_until = 0.0
+
+    @property
+    def open(self) -> bool:
+        return self._clock() < self._open_until
+
+    def record(self, kind: LLMFailureKind) -> None:
+        if kind in (LLMFailureKind.TRANSIENT, LLMFailureKind.UNKNOWN):
+            # 可恢复失败不能代表「这条路走不通」, 复位计数, 避免把偶发超时算成确定性拒绝.
+            self._failures = 0
+            return
+        self._failures += 1
+        if self._failures < self._threshold:
+            return
+        self._failures = 0
+        self._open_until = self._clock() + self._cooldown_s
+        logger.warning(
+            "translation suspended after repeated deterministic failures",
+            kind=str(kind),
+            cooldown_s=self._cooldown_s,
+        )
+
+    def reset(self) -> None:
+        self._failures = 0
+
 
 _THINK = re.compile(r"<think>.*?</think>", re.DOTALL)
 """去除提供商写进正文的思维链, 仅保留最终答案. ``ModelResponse.text`` 已排除 ``ThinkingPart``."""
@@ -92,6 +189,8 @@ class LLMTranslator:
         rate_limit: float = 2.0,
         system_prompt: str | None = None,
         field_prompts: Mapping[MetadataField, str] | None = None,
+        skip_keywords: Sequence[str] = (),
+        gate: _DeterministicFailureGate | None = None,
     ) -> None:
         self._model = model
         self._cache = cache
@@ -100,6 +199,9 @@ class LLMTranslator:
         self._limiter = AsyncLimiter(1, 1 / rate_limit)
         self._system_prompt = system_prompt
         self._field_prompts: Mapping[MetadataField, str] = field_prompts or {}
+        # 小写化后比较: 关键词多为中日文, 但混入的英文缩写按不区分大小写更稳妥.
+        self._skip_keywords: tuple[str, ...] = tuple(k.lower() for k in skip_keywords if k.strip())
+        self._gate = gate or _DeterministicFailureGate()
 
     async def translate(
         self, text: str, target: Language, field: MetadataField, *, use_cache: bool = True
@@ -107,6 +209,15 @@ class LLMTranslator:
         text = text.strip()
         if not text:
             return None
+
+        # 限定词黑名单: 命中即保留原文, 不读缓存也不发请求. 这类文本在上游内容审核处必然被拒,
+        # 省下的是「必败请求 + 单次约 12 秒等待」.
+        if self._skip_keywords:
+            lowered = text.lower()
+            hit = next((k for k in self._skip_keywords if k in lowered), None)
+            if hit is not None:
+                logger.debug("translation skipped by keyword", field=str(field), keyword=hit)
+                return None
 
         if needs_llm_translation(text, target):
             system = build_system_prompt(
@@ -138,7 +249,14 @@ class LLMTranslator:
         return None
 
     async def _ask(self, *, system_prompt: str, user_prompt: str) -> str | None:
-        """单轮请求. 重试由 SDK 客户端承担; 无内容或抛异常时返回 ``None``, 不抛异常."""
+        """单轮请求. 无内容或抛异常时返回 ``None``, 不抛异常.
+
+        失败按类别记账: 确定性失败 (内容审核/鉴权/参数) 连续累计到阈值后暂停翻译一段时间,
+        避免每个任务都重新踩同一个必然失败的坑; 可恢复失败只记日志.
+        """
+        if self._gate.open:
+            logger.debug("translation skipped, failure gate open")
+            return None
         messages: list[ModelMessage] = [
             ModelRequest(parts=[SystemPromptPart(content=system_prompt), UserPromptPart(content=user_prompt)])
         ]
@@ -146,8 +264,16 @@ class LLMTranslator:
             try:
                 response = await model_request(self._model, messages)
             except Exception as e:
-                logger.warning("LLM request failed, retries exhausted", error=str(e))
+                kind = classify_llm_failure(e)
+                self._gate.record(kind)
+                logger.warning(
+                    "LLM request failed",
+                    kind=str(kind),
+                    retryable=kind is LLMFailureKind.TRANSIENT,
+                    error=str(e),
+                )
                 return None
+        self._gate.reset()
         text = response.text
         return _THINK.sub("", text).strip() if text else None
 
@@ -165,6 +291,7 @@ def build_translator(
     device_id_path: Path | None = None,
     system_prompt: str | None = None,
     field_prompts: Mapping[MetadataField, str] | None = None,
+    skip_keywords: Sequence[str] = (),
     cache: TranslationCache | None = None,
 ) -> LLMTranslator | None:
     """未启用、或密钥模式下缺密钥时返回 ``None``. ``cache`` 热重载时复用同一实例.
@@ -190,4 +317,5 @@ def build_translator(
         rate_limit=rate_limit,
         system_prompt=system_prompt,
         field_prompts=field_prompts,
+        skip_keywords=skip_keywords,
     )

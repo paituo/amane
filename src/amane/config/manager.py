@@ -570,6 +570,19 @@ class NetworkConfig(BaseModel):
     rate_limits: dict[str, float] = Field(default_factory=dict)
     """优先级高于站点配置."""
 
+    image_rate_limits: dict[str, float] = Field(default_factory=dict)
+    """图片下载通道的按 host 速率上限, 与页面抓取完全独立, 互不挤占.
+
+    图片与页面常在同一 host 上 (如 ``www.javbus.com/pics/cover/*.jpg``); 共用一个桶时站点的
+    礼貌速率 (1 req/s) 会把取图也拖到 1 req/s. 此处的速率只影响资源下载, 不影响页面请求.
+    """
+
+    image_default_rate_limit: float = Field(default=10, ge=0.1, le=100)
+    """图片下载通道未列在 ``image_rate_limits`` 中的 host 的速率上限.
+
+    图片由 CDN 服侍, 与页面反爬语义不同, 故默认值高于 ``default_rate_limit``.
+    """
+
     default_rate_limit: float = Field(default=5, ge=0.1, le=100)
     """优先级低于 network.rate_limits 与站点配置."""
 
@@ -707,6 +720,12 @@ class LLMConfig(BaseModel):
     model: str = ""
     rate_limit: float = Field(default=2.0, ge=0.1, le=100)
     """与站点限速隔离."""
+
+    skip_keywords: list[str] = Field(default_factory=list)
+    """命中即跳过翻译的限定词: 文本包含任一关键词时不调用外部模型, 直接保留原文.
+
+    用于绕开上游内容审核必定拒绝的题材, 省掉注定失败的请求与等待. 空列表表示不启用.
+    """
 
     @field_validator("system_prompt")
     @classmethod

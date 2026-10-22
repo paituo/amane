@@ -2078,6 +2078,10 @@ export type LlmConfig = {
      * Rate Limit
      */
     rate_limit?: number;
+    /**
+     * Skip Keywords
+     */
+    skip_keywords?: Array<string>;
 };
 
 /**
@@ -3071,6 +3075,16 @@ export type NetworkConfig = {
     rate_limits?: {
         [key: string]: number;
     };
+    /**
+     * Image Rate Limits
+     */
+    image_rate_limits?: {
+        [key: string]: number;
+    };
+    /**
+     * Image Default Rate Limit
+     */
+    image_default_rate_limit?: number;
     /**
      * Default Rate Limit
      */
