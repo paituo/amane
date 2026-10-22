@@ -23,7 +23,6 @@ import argparse
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -42,12 +41,6 @@ COPY_FILES = ("config.toml",)
 只复制配置: ``resources/`` ``models/`` ``*.db`` 属于数据资产. 资源缓存由
 ``AMANE_RESOURCES_DIR`` 共享, 数据库由每个工作区首启自建.
 """
-
-DEFAULT_PORT = 8000
-"""``Justfile`` 与 ``server.py`` 的默认端口."""
-
-PORT_SCAN_LIMIT = 50
-"""自动分配端口时最多向后探测的端口数."""
 
 
 def log(message: str) -> None:
@@ -82,25 +75,6 @@ def find_main_checkout(start: Path) -> Path | None:
     return None
 
 
-def port_in_use(port: int) -> bool:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        try:
-            sock.bind(("127.0.0.1", port))
-        except OSError:
-            return True
-    return False
-
-
-def pick_port(base: int) -> int:
-    """从 ``base`` 起找第一个空闲端口; 全部占用时回退 ``base`` 并告警."""
-    for candidate in range(base, base + PORT_SCAN_LIMIT):
-        if not port_in_use(candidate):
-            return candidate
-    warn(f"{base}..{base + PORT_SCAN_LIMIT} 均被占用, 仍使用 {base}")
-    return base
-
-
 def read_env_file(path: Path) -> dict[str, str]:
     """解析 KEY=VALUE 形式的 env 文件, 忽略空行与注释."""
     values: dict[str, str] = {}
@@ -124,13 +98,20 @@ def set_env_var(env_path: Path, key: str, value: str) -> None:
 
 
 def shared_resources_dir(main: Path) -> Path:
-    """共享资源目录: 优先 ``AMANE_RESOURCES_DIR`` 环境变量, 否则主仓库的 ``data/resources``.
+    """共享资源目录: 环境变量 > 主仓库 ``.env`` 的 ``AMANE_RESOURCES_DIR`` > 主仓库 ``data/resources``.
 
-    默认复用主仓库已经下好的缓存, 不需要额外迁移即可让新工作区直接可用.
+    按这个顺序是因为资源可能已被搬到 ``data`` 之外共享: 此时主仓库 ``data/resources``
+    并不存在, 真正的路径只写在主仓库的 ``.env`` 里. 直接读它才能跟主仓库保持一致.
     """
     override = os.environ.get("AMANE_RESOURCES_DIR")
     if override and override.strip():
         return Path(override.strip())
+
+    main_env = main / ".env"
+    configured = read_env_file(main_env).get("AMANE_RESOURCES_DIR")
+    if configured:
+        return Path(configured)
+
     return main / DATA_DIRNAME / "resources"
 
 
@@ -173,28 +154,6 @@ def ensure_env_file(main: Path, *, force: bool) -> None:
         warn(f"共享资源目录不存在: {resources}; 首次刮削时会自动创建")
     set_env_var(target, "AMANE_RESOURCES_DIR", resources.as_posix())
     log(f".env AMANE_RESOURCES_DIR={resources.as_posix()}")
-
-    ensure_port(target, force=force)
-
-
-def ensure_port(env_path: Path, *, force: bool) -> None:
-    """保证 ``.env`` 中的 ``AMANE_PORT`` 未被占用.
-
-    ``force`` 为真时重新分配; 否则仅在缺失或已被占用时改, 避免每次 setup 都换端口.
-    """
-    existing = read_env_file(env_path).get("AMANE_PORT")
-    if existing and not force:
-        if not existing.isdigit():
-            warn(f".env 中 AMANE_PORT={existing} 不是合法端口, 重新分配")
-        elif port_in_use(int(existing)):
-            warn(f".env 中 AMANE_PORT={existing} 已被占用, 重新分配")
-        else:
-            log(f".env AMANE_PORT={existing} 可用")
-            return
-
-    port = pick_port(DEFAULT_PORT)
-    set_env_var(env_path, "AMANE_PORT", str(port))
-    log(f".env AMANE_PORT={port}")
 
 
 def install_dependencies(*, enabled: bool) -> None:
