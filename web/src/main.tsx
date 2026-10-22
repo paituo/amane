@@ -26,6 +26,18 @@ import { useUIStore } from "@/stores/ui";
 import { routeTree } from "./routeTree.gen";
 import { theme } from "./theme";
 
+// 产物换版后旧页面仍握着上次构建的 chunk 名, 懒加载命中 404 时 Vite 发这个事件; 刷新一次取新壳即可
+// (壳按 no-cache 校验, 必得新产物). 十秒内只自动刷一次: 新壳仍加载失败时不能陷入重载循环.
+window.addEventListener("vite:preloadError", (event) => {
+  const key = "amane:chunk-reload-at";
+  const last = Number(sessionStorage.getItem(key) ?? 0);
+  if (Date.now() - last < 10_000) return;
+  // 接管这次失败: 不拦则 Vite 会把错误重新抛出, 刷新前先闪一下错误边界.
+  event.preventDefault();
+  sessionStorage.setItem(key, String(Date.now()));
+  window.location.reload();
+});
+
 // 支持 dvh 时替换 --amane-vh 的取值 (变量与默认值见 global.css).
 // 判定用实测布局而不是 `CSS.supports`: 厂商自带的 WebView 可能在特性查询里声称支持 dvh 却算不出高度,
 // 换过去会让依赖它的声明失效.
