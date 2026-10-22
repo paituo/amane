@@ -7,7 +7,8 @@ Orca 在新建工作树后自动调用本脚本 (见仓库根 ``orca.yaml`` 的 
 
 1. 从主仓库 ``data/`` 复制配置类文件 (``config.toml``) 与指纹类小文件,
    不复制 ``resources/`` 这类体积巨大的缓存.
-2. 生成 ``.env``, 其中 ``AMANE_RESOURCES_DIR`` 指向共享资源目录, ``AMANE_PORT`` 避开已占用端口.
+2. 生成 ``.env``: 以主仓库的 ``.env`` (或 ``.env.dev``) 为模板, 再把 ``AMANE_RESOURCES_DIR``
+   指向共享资源目录 —— 这样每个工作区都能读到同一批已下载的图片, 不必各存一份.
 3. 同步 Python 与前端依赖 (``just setup``).
 
 设计约束:
@@ -137,7 +138,7 @@ def copy_config_files(main: Path, *, force: bool) -> None:
 
 
 def ensure_env_file(main: Path, *, force: bool) -> None:
-    """生成工作区 ``.env``, 写入共享资源目录与可用端口."""
+    """生成工作区 ``.env``: 以主仓库为模板, 再写入共享资源目录."""
     target = ROOT / ".env"
     if not target.exists() or force:
         for candidate in (main / ".env", main / ".env.dev"):
