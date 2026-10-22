@@ -168,6 +168,80 @@ class TestMetadataHttp:
         assert "vr" not in (await client.get("metadata/schema")).json()["properties"]
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_list_filter_by_library(self, client: AsyncClient, repo: Repository):
+        """媒体库筛选按挂载文件所属库判定: 多库 OR, 与其它筛选项 AND, 未知库 id 返回空而不报错."""
+        second = await repo.create_library(name="second", path="/second")
+        assert second.id is not None
+        only_first = await repo.upsert_metadata(number="LIB-001")
+        only_second = await repo.upsert_metadata(number="LIB-002")
+        both = await repo.upsert_metadata(number="LIB-003")
+        assert only_first.id is not None and only_second.id is not None and both.id is not None
+        await repo.create_media_file(library_id=1, path="/lib1/LIB-001.mp4", metadata_id=only_first.id)
+        await repo.create_media_file(library_id=second.id, path="/lib2/LIB-002.mp4", metadata_id=only_second.id)
+        await repo.create_media_file(library_id=1, path="/lib1/LIB-003.mp4", metadata_id=both.id)
+        await repo.create_media_file(library_id=second.id, path="/lib2/LIB-003.mp4", metadata_id=both.id)
+
+        def numbers(resp) -> list[str]:
+            return [item["number"] for item in resp.json()["items"]]
+
+        by_first = await client.get("metadata?library_id=1&sort_by=number&order=asc")
+        assert by_first.status_code == 200
+        assert numbers(by_first) == ["LIB-001", "LIB-003"]
+        by_second = await client.get("metadata?library_id=2&sort_by=number&order=asc")
+        assert numbers(by_second) == ["LIB-002", "LIB-003"]
+        union = await client.get("metadata?library_id=1&library_id=2&sort_by=number&order=asc")
+        assert numbers(union) == ["LIB-001", "LIB-002", "LIB-003"]
+        # 不存在的库 id 是合法查询, 结果为空集合 (与 facet id 未知同口径).
+        unknown = await client.get("metadata?library_id=999")
+        assert unknown.status_code == 200
+        assert (numbers(unknown), unknown.json()["total"]) == ([], 0)
+        # 与其它筛选项 AND: 只剩第一库里没有挂载文件的条目.
+        with_phase = await client.get("metadata?library_id=1&has_subtitle=true")
+        assert (numbers(with_phase), with_phase.json()["total"]) == ([], 0)
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_favorite_tag_round_trip(self, client: AsyncClient, repo: Repository):
+        """影片收藏复用用户标签: 按名取回/新建 → 挂载 → 按该标签筛列表 → 详情带出标签.
+
+        前端把「★收藏」当成固定名称的标签, 因此这条链路 (含名称里的非 ASCII 符号能被 search 命中)
+        是收藏功能的契约, 不是普通用例.
+        """
+        name = "★收藏"
+        created = await client.post("facets/user_tag", json={"names": [name]})
+        assert created.status_code == 200
+        tag_id = created.json()["items"][0]["id"]
+        again = await client.post("facets/user_tag", json={"names": [name]})
+        assert (again.json()["items"][0]["id"], again.json()["created"]) == (tag_id, 0)
+
+        found = await client.get("facets/user_tag", params={"search": name})
+        assert [item["id"] for item in found.json()["items"]] == [tag_id]
+
+        target = await repo.upsert_metadata(number="FAV-001")
+        await repo.upsert_metadata(number="FAV-002")
+        assert target.id is not None
+        attached = await client.post(
+            "metadata/batch/user-tags",
+            json={"ids": [target.id], "user_tag_ids": [tag_id], "action": "attach"},
+        )
+        assert attached.status_code == 200
+
+        listed = await client.get("metadata", params={"user_tag_id": [tag_id]})
+        assert ([item["number"] for item in listed.json()["items"]], listed.json()["total"]) == (
+            ["FAV-001"],
+            1,
+        )
+        detail = await client.get(f"metadata/{target.id}")
+        assert [tag["id"] for tag in detail.json()["user_tags"]] == [tag_id]
+
+        detached = await client.post(
+            "metadata/batch/user-tags",
+            json={"ids": [target.id], "user_tag_ids": [tag_id], "action": "detach"},
+        )
+        assert detached.status_code == 200
+        empty = await client.get("metadata", params={"user_tag_id": [tag_id]})
+        assert (empty.json()["items"], empty.json()["total"]) == ([], 0)
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_schema_includes_editable_fields(self, client: AsyncClient):
         resp = await client.get("metadata/schema")
         assert resp.status_code == 200

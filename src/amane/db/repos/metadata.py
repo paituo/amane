@@ -139,6 +139,7 @@ class MetadataRepoMixin(RepositoryMixinBase):
         publisher_ids: Sequence[int] | None = None,
         series_ids: Sequence[int] | None = None,
         user_tag_ids: Sequence[int] | None = None,
+        library_ids: Sequence[int] | None = None,
         has_files: bool | None = None,
         has_subtitle: bool | None = None,
         vr: bool | None = None,
@@ -204,6 +205,11 @@ class MetadataRepoMixin(RepositoryMixinBase):
                 base = base.where(col(Metadata.series).in_(series_names))
             if has_files is not None:
                 base = base.where(_metadata_has_files_clause(has_files=has_files))
+            if library_ids is not None:
+                id_list = list(unique_ids(library_ids))
+                if not id_list:
+                    return [], 0
+                base = base.where(_metadata_linked_file_exists(col(MediaFile.library_id).in_(id_list)))
             if vr is True:
                 base = base.where(metadata_vr_predicate())
             elif vr is False:

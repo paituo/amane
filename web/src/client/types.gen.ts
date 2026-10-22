@@ -5954,6 +5954,12 @@ export type ListMetadataData = {
          */
         user_tag_id?: Array<number> | null;
         /**
+         * Library Id
+         *
+         * Filter by owning library id(s); OR over linked MediaFile(s)
+         */
+        library_id?: Array<number> | null;
+        /**
          * Has Files
          *
          * Filter by presence of linked MediaFile(s)

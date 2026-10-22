@@ -6,6 +6,7 @@ import { useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   getFacetOptions,
+  listLibrariesOptions,
   listMetadataInfiniteOptions,
   listMetadataOptions,
 } from "@/client/@tanstack/react-query.gen";
@@ -109,6 +110,21 @@ function ActiveTriChip({ label, onClear }: { label: string; onClear: () => void 
   );
 }
 
+/** 库名要单独查一次全量列表; 已删除的库保留 id 兜底, 以免筛选条凭空消失. */
+function ActiveLibraryChip({
+  libraryIds,
+  onClear,
+}: {
+  libraryIds: readonly number[];
+  onClear: () => void;
+}) {
+  const { t } = useTranslation("metadata");
+  const { data } = useQuery(listLibrariesOptions());
+  const names = new Map((data?.items ?? []).map((library) => [library.id, library.name]));
+  const label = libraryIds.map((id) => names.get(id) ?? `#${id}`).join(" / ");
+  return <ActiveTriChip label={`${t("search.library")}: ${label}`} onClear={onClear} />;
+}
+
 function MetaIndexPage() {
   const { t } = useTranslation(["metadata", "common", "savedQueries"]);
   const search = Route.useSearch();
@@ -118,6 +134,7 @@ function MetaIndexPage() {
 
   const hasFiles = parseHasFiles(search.has_files);
   const vr = parseHasFiles(search.vr);
+  const libraryIds = search.library_id ?? [];
   const filePhase: FilePhaseFilters = {
     has_subtitle: parseHasFiles(search.has_subtitle),
     uncensored: parseHasFiles(search.uncensored),
@@ -132,7 +149,9 @@ function MetaIndexPage() {
     filePhase.definition != null ||
     filePhase.content_type != null;
   const [searchInput, setSearchInput] = useState(search.q ?? "");
-  const [advancedOpen, setAdvancedOpen] = useState(hasFiles !== null || vr !== null || phaseActive);
+  const [advancedOpen, setAdvancedOpen] = useState(
+    hasFiles !== null || vr !== null || phaseActive || libraryIds.length > 0,
+  );
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const filters: FacetFilters = {
@@ -156,6 +175,7 @@ function MetaIndexPage() {
     mosaic: filePhase.mosaic ?? undefined,
     definition: filePhase.definition ?? undefined,
     content_type: filePhase.content_type ?? undefined,
+    library_id: search.library_id,
     ...filters,
     ...(search.saved_query_id != null ? { saved_query_id: search.saved_query_id } : {}),
   };
@@ -296,6 +316,7 @@ function MetaIndexPage() {
     hasFiles !== null ||
     vr !== null ||
     phaseActive ||
+    libraryIds.length > 0 ||
     search.saved_query_id != null;
 
   return (
@@ -379,6 +400,16 @@ function MetaIndexPage() {
           opened={narrowViewport || advancedOpen}
           filters={filters}
           onSelect={appendFacet}
+          libraryIds={libraryIds}
+          onLibraryIdsChange={(ids) =>
+            void navigate({
+              search: (prev) => ({
+                ...prev,
+                library_id: ids.length > 0 ? ids : undefined,
+                page: 1,
+              }),
+            })
+          }
           hasFiles={hasFiles}
           onHasFilesChange={setHasFilesFilter}
           vr={vr}
@@ -423,6 +454,14 @@ function MetaIndexPage() {
           )}
           {hasFiles !== null && (
             <ActiveHasFilesChip hasFiles={hasFiles} onClear={() => setHasFilesFilter(null)} />
+          )}
+          {libraryIds.length > 0 && (
+            <ActiveLibraryChip
+              libraryIds={libraryIds}
+              onClear={() =>
+                void navigate({ search: (prev) => ({ ...prev, library_id: undefined, page: 1 }) })
+              }
+            />
           )}
           {vr !== null && <ActiveVrChip vr={vr} onClear={() => setVrFilter(null)} />}
           {filePhase.has_subtitle !== null && (

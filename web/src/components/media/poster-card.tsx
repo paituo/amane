@@ -4,12 +4,14 @@ import { Link } from "@tanstack/react-router";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { MetadataResponse } from "@/client/types.gen";
+import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { FilePhaseOverlay } from "@/components/media/file-phase-badges";
 import { OverlayChip, OverlayChipLabel } from "@/components/media/overlay-chip";
 import { ProxyImage } from "@/components/media/proxy-image";
 import { VrOverlayChip } from "@/components/media/vr-badge";
 import { ageAtRelease } from "@/lib/format-birthday";
 import { formatReleaseYearMonth } from "@/lib/format-release";
+import { useFavoriteIds, useFavoriteMutation } from "@/lib/media/favorites";
 import { proxyImageUrl } from "@/lib/utils";
 
 interface PosterCardProps {
@@ -27,6 +29,9 @@ interface PosterCardProps {
 export function PosterCard({ item, actorBirthday, onOpen }: PosterCardProps) {
   const { t } = useTranslation("metadata");
   const [errored, setErrored] = useState(false);
+  const favoriteIds = useFavoriteIds();
+  const favoriteMutation = useFavoriteMutation();
+  const isFavorite = favoriteIds.has(item.id);
   const posterUrl = proxyImageUrl(item.poster_url ?? item.poster_urls?.[0]);
   const showImage = posterUrl && !errored;
   const actors = item.actors ?? [];
@@ -107,9 +112,30 @@ export function PosterCard({ item, actorBirthday, onOpen }: PosterCardProps) {
           )}
         </Box>
         <Stack gap={4} p="xs">
-          <Text size="sm" fw={600} ff="monospace" lineClamp={1}>
-            {item.number}
-          </Text>
+          {/* 四个角都被水印与评分占满, 收藏动作落在标题行末尾, 不遮挡海报画面. */}
+          <Group gap={4} wrap="nowrap" align="center">
+            <Text size="sm" fw={600} ff="monospace" lineClamp={1} style={{ minWidth: 0, flex: 1 }}>
+              {item.number}
+            </Text>
+            <HintedActionIcon
+              size="sm"
+              variant="subtle"
+              color={isFavorite ? "yellow" : "gray"}
+              loading={
+                favoriteMutation.isPending && favoriteMutation.variables?.metadataId === item.id
+              }
+              aria-pressed={isFavorite}
+              label={isFavorite ? t("favorite.remove") : t("favorite.add")}
+              onClick={(event) => {
+                // 整张卡片是链接, 收藏不能顺带导航.
+                event.preventDefault();
+                event.stopPropagation();
+                favoriteMutation.mutate({ metadataId: item.id, favorite: !isFavorite });
+              }}
+            >
+              {isFavorite ? <IconStar size={14} fill="currentColor" /> : <IconStar size={14} />}
+            </HintedActionIcon>
+          </Group>
           {item.title && (
             <Text size="xs" c="dimmed" lineClamp={2} title={item.title}>
               {item.title}

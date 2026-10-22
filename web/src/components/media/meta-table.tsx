@@ -14,7 +14,7 @@ import {
   type MantineBreakpoint,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconDots, IconRefresh, IconTag, IconTrash } from "@tabler/icons-react";
+import { IconDots, IconRefresh, IconStar, IconTag, IconTrash } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
@@ -38,6 +38,7 @@ import { useResizableColumns } from "@/hooks/use-resizable-columns";
 import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
 import { USER_TAG_FACET_LIST } from "@/lib/facets";
+import { useFavoriteIds, useFavoriteMutation } from "@/lib/media/favorites";
 import { type MetaTableColumnKey, useUIStore } from "@/stores/ui";
 import { VrBadge } from "./vr-badge";
 import classes from "./meta-table.module.css";
@@ -151,6 +152,8 @@ export function MetaTable({
   const [tagIds, setTagIds] = useState<string[]>([]);
 
   const { data: userTags } = useQuery(listFacetsOptions(USER_TAG_FACET_LIST));
+  const favoriteIds = useFavoriteIds();
+  const favoriteMutation = useFavoriteMutation();
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: listMetadataQueryKey() });
 
@@ -393,8 +396,26 @@ export function MetaTable({
                   )}
                 </Table.Td>
                 <Table.Td>
-                  {/* 窄屏动作列只容得下一个按钮, 两个动作移入菜单. */}
+                  {/* 窄屏动作列只容得下一个按钮, 其余动作移入菜单. */}
                   <Group gap={4} justify="flex-end" wrap="nowrap" visibleFrom="sm">
+                    <HintedActionIcon
+                      variant="subtle"
+                      color={favoriteIds.has(item.id) ? "yellow" : "gray"}
+                      aria-pressed={favoriteIds.has(item.id)}
+                      label={favoriteIds.has(item.id) ? t("favorite.remove") : t("favorite.add")}
+                      onClick={() =>
+                        favoriteMutation.mutate({
+                          metadataId: item.id,
+                          favorite: !favoriteIds.has(item.id),
+                        })
+                      }
+                    >
+                      {favoriteIds.has(item.id) ? (
+                        <IconStar size={16} fill="currentColor" />
+                      ) : (
+                        <IconStar size={16} />
+                      )}
+                    </HintedActionIcon>
                     <HintedActionIcon
                       variant="subtle"
                       label={t("actions.scrape")}
@@ -422,6 +443,17 @@ export function MetaTable({
                         </ActionIcon>
                       </Menu.Target>
                       <Menu.Dropdown>
+                        <Menu.Item
+                          leftSection={<IconStar size={14} />}
+                          onClick={() =>
+                            favoriteMutation.mutate({
+                              metadataId: item.id,
+                              favorite: !favoriteIds.has(item.id),
+                            })
+                          }
+                        >
+                          {favoriteIds.has(item.id) ? t("favorite.remove") : t("favorite.add")}
+                        </Menu.Item>
                         <Menu.Item
                           leftSection={<IconRefresh size={14} />}
                           onClick={() =>

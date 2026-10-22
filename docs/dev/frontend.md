@@ -41,6 +41,8 @@
 
 **评论**: 排序与编辑态只在组件内, 不写地址栏. 影片详情与演员详情的用户标签与刮削标签分栏; 加减菜单一次提交多名, 但固定为两次请求 — 待新建的名称先经 `POST /api/facets/user_tag` 换成 id, 再与已选 id 一起交给所在页的挂载端点 (影片 `/api/metadata/batch/user-tags`, 演员 `/api/actors/batch/user-tags`), 端点语义见 [api.md](api.md). 演员浏览经由 `/api/actors`, 身份治理仍调用 `/api/facets/actor`, 筛选字段的单一事实源是 `lib/actors/browse.ts`; 演员详情出演作品的排序项与片库同源 (`lib/media/browse.ts` 的 `METADATA_SORT_OPTIONS`), 记忆落在 ui store 的 `actorWorksSort`.
 
+**影片收藏与媒体库筛选**: 影片没有收藏列, 收藏复用用户标签 — 标签「★收藏」的成员即已收藏的影片, 因此收藏页就是 `/meta?user_tag_id=<该标签 id>`, 没有独立路由. 侧栏收藏入口与片库同路径, 高亮只能归一处: 判据是解析后的 `search.user_tag_id` 是否含该标签 id (数组参数被序列化成 JSON `[1]`, 不要解析地址串). 这两个入口用裸 `a` 而非 `Link` — `Link` 会给同路径的两个链接都加 `aria-current="page"`, 而 Mantine NavLink 把 `aria-current='page'` 与 `data-active` 并列当作激活态. 标签名是数据 (`user_tags.name`), 不随界面语言变化. 列表项不带标签, 卡片上的收藏态靠一次「该标签的成员 id 集合」查询 (`lib/media/favorites.ts`), 详情页直接读详情响应的 `user_tags`; 收藏动作后失效 `listMetadata` / `listFacets` / `getMetadata` 三族. 媒体库筛选是片库高级筛选面板的库多选, 参数 `library_id` 与 facet 筛选同在 `lib/media/browse.ts` 的 schema 上, 因此可被侧栏默认参数记忆, 判定口径见 [api.md](api.md).
+
 **播放**: 面板先取来源列表 (不调用插件因此立刻渲染), 流列表按需加载; 两级选择经 `EnumToggle` 平铺, 失败信息条给出重试入口. 来源顺序由用户在插件页 `PlaybackOrderSection` 维护, 面板按它重排, **位置 0 即默认探测的来源**. 详情页的预告片与点播经 `playback-player-lazy.ts` 共用同一份播放器声明, 播放画面只由该播放器渲染; 主机侧契约见 [plugins.md](plugins.md), 手势、全屏与浮层的约定见 `components/media/playback-panel.tsx` 与 `playback-player.tsx` 的文件注释.
 
 ## 列表分页

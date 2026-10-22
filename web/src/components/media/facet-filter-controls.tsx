@@ -1,13 +1,13 @@
 /**
  * 片库列表的高级 facet 筛选: 展开后每个 kind 独立短搜索框, 选中即追加到 URL search.
- * 另含条目类型与关联文件相位筛选.
+ * 另含媒体库、条目类型与关联文件相位筛选.
  */
 
-import { Collapse, Select, SimpleGrid, Stack, Text } from "@mantine/core";
+import { Collapse, MultiSelect, Select, SimpleGrid, Stack, Text } from "@mantine/core";
 import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listFacetsOptions } from "@/client/@tanstack/react-query.gen";
+import { listFacetsOptions, listLibrariesOptions } from "@/client/@tanstack/react-query.gen";
 import type { ContentType, FacetKind, Mosaic } from "@/client/types.gen";
 import { CONTENT_TYPES, FACET_KINDS, FILE_DEFINITIONS, MOSAICS } from "@/lib/exhaustive-maps";
 import { facetIdsOf, type FacetFilters } from "@/lib/facets";
@@ -31,6 +31,9 @@ interface FacetFilterControlsProps {
   /** 当前已激活的过滤参数; 已选同一实体时禁用对应选项. */
   filters: FacetFilters;
   onSelect: (kind: FacetKind, id: number) => void;
+  /** 媒体库筛选; 空数组 = 不限. */
+  libraryIds: readonly number[];
+  onLibraryIdsChange: (ids: number[]) => void;
   /** 当前关联文件筛选; null = 不限. */
   hasFiles: HasFilesFilter;
   onHasFilesChange: (value: HasFilesFilter) => void;
@@ -39,6 +42,40 @@ interface FacetFilterControlsProps {
   onVrChange: (value: HasFilesFilter) => void;
   filePhase: FilePhaseFilters;
   onFilePhaseChange: (value: FilePhaseFilters) => void;
+}
+
+/** 库全部由 `GET /libraries` 提供, 没有分页; 多选命中任一库的影片即算命中. */
+function LibraryPicker({
+  libraryIds,
+  onChange,
+  enabled,
+}: {
+  libraryIds: readonly number[];
+  onChange: (ids: number[]) => void;
+  enabled: boolean;
+}) {
+  const { t } = useTranslation("metadata");
+  const { data, isFetching } = useQuery({ ...listLibrariesOptions(), enabled });
+
+  return (
+    <MultiSelect
+      label={t("search.library")}
+      placeholder={t("search.any")}
+      data={(data?.items ?? []).map((library) => ({
+        value: String(library.id),
+        label: library.name,
+      }))}
+      value={libraryIds.map(String)}
+      onChange={(values) => {
+        const ids = values.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+        onChange(ids);
+      }}
+      nothingFoundMessage={isFetching ? "…" : t("search.facetEmpty")}
+      clearable
+      searchable
+      size="sm"
+    />
+  );
 }
 
 function KindFacetPicker({
@@ -132,6 +169,8 @@ export function FacetFilterControls({
   opened,
   filters,
   onSelect,
+  libraryIds,
+  onLibraryIdsChange,
   hasFiles,
   onHasFilesChange,
   vr,
@@ -161,6 +200,7 @@ export function FacetFilterControls({
               enabled={opened}
             />
           ))}
+          <LibraryPicker libraryIds={libraryIds} onChange={onLibraryIdsChange} enabled={opened} />
           <Select
             label={t("search.hasFiles")}
             placeholder={t("search.hasFilesAny")}

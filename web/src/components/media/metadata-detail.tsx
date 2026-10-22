@@ -68,6 +68,7 @@ import { SchemaForm } from "@/components/schema-form/schema-form";
 import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
 import { USER_TAG_FACET_LIST } from "@/lib/facets";
+import { hasFavoriteTag, useFavoriteMutation, useFavoriteTagId } from "@/lib/media/favorites";
 import { FIELD_LABEL_KEY, LOCKABLE_FIELDS } from "@/lib/media/metadata-fields";
 import { proxyImageUrl } from "@/lib/utils";
 import { ProxyImage } from "@/components/media/proxy-image";
@@ -274,6 +275,9 @@ export function MetadataDetail({
 
   const ensureTagsMutation = useMutation(createUserTagsMutation());
   const applyTagsMutation = useMutation(batchMetadataUserTagsMutation());
+  const favoriteTagId = useFavoriteTagId().data ?? null;
+  const favoriteMutation = useFavoriteMutation();
+  const isFavorite = hasFavoriteTag(data?.user_tags ?? [], favoriteTagId);
 
   const [pendingLock, setPendingLock] = useState<MetadataField | null>(null);
   const [lockTarget, setLockTarget] = useState<{ id: number; fields: MetadataField[] } | null>(
@@ -637,9 +641,25 @@ export function MetadataDetail({
 
         <Stack gap="sm" style={{ flex: "2 1 280px", minWidth: 260 }}>
           <div>
-            <Title order={2} ff="monospace">
-              {item.number}
-            </Title>
+            <Group gap="sm" align="center" wrap="wrap">
+              <Title order={2} ff="monospace">
+                {item.number}
+              </Title>
+              {/* 收藏是「★收藏」标签的挂载关系, 不是独立列; 状态直接读详情的 user_tags. */}
+              <Button
+                size="compact-sm"
+                variant={isFavorite ? "light" : "default"}
+                color={isFavorite ? "yellow" : undefined}
+                loading={favoriteMutation.isPending}
+                aria-pressed={isFavorite}
+                leftSection={
+                  isFavorite ? <IconStar size={14} fill="currentColor" /> : <IconStar size={14} />
+                }
+                onClick={() => favoriteMutation.mutate({ metadataId: id, favorite: !isFavorite })}
+              >
+                {isFavorite ? t("favorite.remove") : t("favorite.add")}
+              </Button>
+            </Group>
             {item.title && (
               <Group gap={4} align="center" wrap="nowrap">
                 <Text c="dimmed">{item.title}</Text>

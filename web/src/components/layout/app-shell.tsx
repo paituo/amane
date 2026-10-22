@@ -5,6 +5,7 @@ import {
   Burger,
   Divider,
   Group,
+  Loader,
   Menu,
   NavLink,
   ScrollArea,
@@ -34,12 +35,14 @@ import {
   IconRss,
   IconSearch,
   IconSettings,
+  IconStar,
   IconSun,
   IconSunMoon,
   IconUsers,
   IconWorldSearch,
   type Icon,
 } from "@tabler/icons-react";
+import { useMutation } from "@tanstack/react-query";
 import { Link, Outlet, useLocation, useNavigate } from "@tanstack/react-router";
 import type { ParseKeys } from "i18next";
 import { type ReactNode, useState } from "react";
@@ -48,6 +51,7 @@ import { APP_SHELL_HEADER_HEIGHT } from "@/components/layout/app-shell-metrics";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { VersionMenu } from "@/components/layout/version-menu";
 import { APP_NAME, GITHUB_URL } from "@/lib/app";
+import { ensureFavoriteTagId, useFavoriteTagId } from "@/lib/media/favorites";
 import { navItemClick } from "@/lib/nav-defaults";
 import { shellEnvironment } from "@/lib/shell";
 import { useConnectionStore } from "@/stores/connection";
@@ -60,6 +64,8 @@ interface NavItem {
   labelKey: CommonKey;
   icon: Icon;
   end?: boolean;
+  /** 收藏入口: 与片库同路径, 落地为带收藏标签参数的片库视图. */
+  favorites?: boolean;
 }
 
 interface NavGroup {
@@ -75,6 +81,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/", labelKey: "nav.agent", icon: IconMessageChatbot },
       { to: "/meta", labelKey: "nav.meta", icon: IconMovie },
+      { to: "/meta", labelKey: "nav.favorites", icon: IconStar, favorites: true },
       { to: "/actors", labelKey: "nav.actors", icon: IconUsers },
       { to: "/catalog", labelKey: "nav.catalog", icon: IconCategory },
       { to: "/feeds", labelKey: "nav.feeds", icon: IconRss, end: true },
@@ -108,26 +115,85 @@ function isNavActive(pathname: string, to: string, end = false): boolean {
   return pathname === to || pathname.startsWith(`${to}/`);
 }
 
-function NavItemLink({ item, onNavigate }: { item: NavItem; onNavigate?: () => void }) {
+/**
+ * 收藏是片库的一个筛选视图 (与「只看某合集」同形), 因此与片库同路径, 只能从 search 区分.
+ * 判据取自路由解析后的 search, 不解析 href: 数组参数由 router 序列化成 JSON (`user_tag_id=[1]`,
+ * 多值 `[1,2]`, 序列化形态随版本变动), 而解析后的 `user_tag_id` 恒为 number[].
+ */
+function searchHasUserTag(search: object, favoriteTagId: number): boolean {
+  if (!("user_tag_id" in search)) return false;
+  const raw: unknown = search.user_tag_id;
+  return Array.isArray(raw) && raw.some((value) => value === favoriteTagId);
+}
+
+function NavItemLink({
+  item,
+  onNavigate,
+  favoriteTagId,
+}: {
+  item: NavItem;
+  onNavigate?: () => void;
+  favoriteTagId: number | null;
+}) {
   const { t } = useTranslation("common");
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const listDefaults = useUIStore((state) => state.listDefaults);
+  const ensureFavoriteMutation = useMutation({ mutationFn: ensureFavoriteTagId });
   const Icon = item.icon;
+
+  const favoritesActive = favoriteTagId != null && searchHasUserTag(search, favoriteTagId);
+  // 两个入口共用一个路径, 高亮只能归一处: 带收藏参数时只亮收藏.
+  const active = item.favorites
+    ? favoritesActive
+    : isNavActive(pathname, item.to, item.end) && !(item.to === "/meta" && favoritesActive);
+
   const shell = {
     label: t(item.labelKey),
     leftSection: <Icon size={18} stroke={1.6} />,
-    active: isNavActive(pathname, item.to, item.end),
+    active,
     variant: "filled" as const,
     style: { borderRadius: "var(--mantine-radius-md)" },
   };
+
+  /** 落地为「片库 + 收藏标签」视图: 保留侧栏默认参数, 只叠加这一个筛选. */
+  function openFavorites(tagId: number): void {
+    void navigate({
+      to: "/meta",
+      search: { ...listDefaults.meta, user_tag_id: [tagId] },
+    });
+  }
+
+  if (item.favorites) {
+    return (
+      <NavLink
+        component="a"
+        href={favoriteTagId != null ? `/meta?user_tag_id=${favoriteTagId}` : "/meta"}
+        rightSection={ensureFavoriteMutation.isPending ? <Loader size={14} /> : undefined}
+        onClick={(event) =>
+          navItemClick(event, onNavigate, () => {
+            if (favoriteTagId != null) {
+              openFavorites(favoriteTagId);
+              return;
+            }
+            // 还没收藏过任何影片: 标签不存在, 入口本身负责建标签.
+            void ensureFavoriteMutation.mutateAsync().then(openFavorites);
+          })
+        }
+        {...shell}
+      />
+    );
+  }
+
   // 列表条目携带该页的默认参数: 入口地址不残留搜索词、页码与 agent 深链.
   // 路由的参数类型各不相同, 因此按 `to` 分支给字面量目标. 分类入口是种类索引页, 没有可承载的参数.
+  // 片库与收藏两个入口用裸 `a` 而非 `Link`: 二者同路径, `Link` 会给它们都加 `aria-current="page"`,
+  // 而 Mantine NavLink 把 `aria-current='page'` 与 `data-active` 并列当作激活态, 结果是两个一起高亮.
   if (item.to === "/meta") {
     return (
       <NavLink
-        component={Link}
-        to="/meta"
+        component="a"
+        href="/meta"
         onClick={(event) =>
           navItemClick(
             event,
@@ -378,6 +444,7 @@ export function AppShellLayout(): ReactNode {
   const desktopCollapsed = useUIStore((s) => s.navbarCollapsed);
   const toggleDesktop = useUIStore((s) => s.toggleNavbar);
   const shell = shellEnvironment();
+  const favoriteTagId = useFavoriteTagId().data ?? null;
 
   return (
     <AppShell
@@ -439,7 +506,12 @@ export function AppShellLayout(): ReactNode {
                 {t(group.labelKey)}
               </Text>
               {group.items.map((item) => (
-                <NavItemLink key={item.to} item={item} onNavigate={closeMobile} />
+                <NavItemLink
+                  key={item.labelKey}
+                  item={item}
+                  onNavigate={closeMobile}
+                  favoriteTagId={favoriteTagId}
+                />
               ))}
             </div>
           ))}
@@ -448,6 +520,7 @@ export function AppShellLayout(): ReactNode {
         <NavItemLink
           item={{ to: "/settings", labelKey: "nav.settings", icon: IconSettings }}
           onNavigate={closeMobile}
+          favoriteTagId={favoriteTagId}
         />
         {/* 窄屏顶栏放不下版本与外链, 收进侧栏底部. */}
         <Group hiddenFrom="sm" gap="xs" px="xs" pt="sm" wrap="nowrap">

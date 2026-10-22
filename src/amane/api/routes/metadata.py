@@ -85,6 +85,7 @@ class MetadataFilters:
     publisher_ids: Sequence[int] | None = None
     series_ids: Sequence[int] | None = None
     user_tag_ids: Sequence[int] | None = None
+    library_ids: Sequence[int] | None = None
     has_files: bool | None = None
     has_subtitle: bool | None = None
     vr: bool | None = None
@@ -152,6 +153,9 @@ async def list_metadata(
     publisher_id: Annotated[list[int] | None, Query(description="Filter by publisher facet id(s); OR")] = None,
     series_id: Annotated[list[int] | None, Query(description="Filter by series facet id(s); OR")] = None,
     user_tag_id: Annotated[list[int] | None, Query(description="Filter by user tag id(s); AND")] = None,
+    library_id: Annotated[
+        list[int] | None, Query(description="Filter by owning library id(s); OR over linked MediaFile(s)")
+    ] = None,
     has_files: Annotated[bool | None, Query(description="Filter by presence of linked MediaFile(s)")] = None,
     has_subtitle: Annotated[bool | None, Query(description="Filter by linked file subtitle marker")] = None,
     vr: Annotated[bool | None, Query(description="Filter by VR marker (entry tag vocabulary)")] = None,
@@ -181,6 +185,7 @@ async def list_metadata(
         publisher_ids=publisher_id,
         series_ids=series_id,
         user_tag_ids=user_tag_id,
+        library_ids=library_id,
         has_files=has_files,
         has_subtitle=has_subtitle,
         vr=vr,
@@ -220,6 +225,7 @@ async def _fetch_metadata(
         publisher_ids=filters.publisher_ids,
         series_ids=filters.series_ids,
         user_tag_ids=filters.user_tag_ids,
+        library_ids=filters.library_ids,
         has_files=filters.has_files,
         has_subtitle=filters.has_subtitle,
         vr=filters.vr,
