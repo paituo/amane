@@ -339,18 +339,21 @@ def build_search(
     db_path: Path,
     data_dir: Path,
     *,
+    models_dir: Path | None = None,
     reuse: ReusedEmbedding | None = None,
 ) -> SearchStack | None:
     """构造检索栈并注册写入 sink.
 
     同步构造: ``SearchStore`` 只记路径, 建连在 ``open()`` 里; provider 亦然, 模型在首次使用时加载.
     向量表是派生缓存, 与业务库分文件, 原因见 ``docs/dev/search.md``.
-    内嵌模型权重落在 ``data_dir/models``, 与 resources / translations.db 同处一地, 便于整体迁移与打包.
+    内嵌模型权重默认落在 ``data_dir/models``; ``models_dir`` 可把它指到 data 之外,
+    便于多个检出共用一份权重 (见 ``ColdSettings.models_dir``).
     ``reuse`` 来自旧栈: 嵌入配置未变时直接接管, 不重新加载模型.
     """
     if not hot.search.keyword_enabled and not hot.search.vector_enabled:
         return None
-    provider = reuse.provider if reuse is not None else build_embedding_provider(hot, data_dir / "models")
+    weights = models_dir if models_dir is not None else data_dir / "models"
+    provider = reuse.provider if reuse is not None else build_embedding_provider(hot, weights)
     store = SearchStore(
         db_path,
         dim=hot.search.embedding.dim,
@@ -615,6 +618,7 @@ class AppRuntime:
             self.repo,
             self.config.cold.db_path,
             self.config.cold.data_dir,
+            models_dir=self.config.cold.resolved_models_dir,
             reuse=reuse,
         )
         if stack is not None:

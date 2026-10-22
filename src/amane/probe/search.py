@@ -151,7 +151,7 @@ def _acquire_provider(ctx: ProbeContext) -> tuple[EmbeddingProvider | None, bool
         and ctx.saved.search.embedding == ctx.hot.search.embedding
     ):
         return stack.provider, False
-    return build_embedding_provider(ctx.hot, ctx.data_dir / "models"), True
+    return build_embedding_provider(ctx.hot, ctx.resolved_models_dir), True
 
 
 def _flag(enabled: bool) -> str:

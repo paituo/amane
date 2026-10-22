@@ -5,11 +5,15 @@ Orca 在新建工作树后自动调用本脚本 (见仓库根 ``orca.yaml`` 的 
 
 工作内容:
 
-1. 从主仓库 ``data/`` 复制配置类文件 (``config.toml``) 与指纹类小文件,
-   不复制 ``resources/`` 这类体积巨大的缓存.
-2. 生成 ``.env``: 以主仓库的 ``.env`` (或 ``.env.dev``) 为模板, 再把 ``AMANE_RESOURCES_DIR``
-   指向共享资源目录 —— 这样每个工作区都能读到同一批已下载的图片, 不必各存一份.
+1. 整体复制主仓库的 ``data/``: 配置、业务库、agent 会话历史、远程缓存一并带过去.
+   ``data/`` 里不再有体积巨大的资源缓存与模型权重 —— 那两样已移到 ``data`` 之外,
+   由 ``.env`` 的 ``AMANE_RESOURCES_DIR`` / ``AMANE_MODELS_DIR`` 指向共享目录.
+2. 生成 ``.env``: 以主仓库的 ``.env`` (或 ``.env.dev``) 为模板, 把上述两个共享目录
+   写成主仓库正在用的值 —— 于是每个工作区读同一批图片与同一份模型权重, 不必各存一份.
 3. 同步 Python 与前端依赖 (``just setup``).
+
+库文件要带过去: 新库虽然能自建出同样的表结构, 但没有数据, 刮削过的条目、收藏、
+设置全要重来. 复制前需保证主仓库进程已退出, 否则 WAL 里可能有未落盘的事务.
 
 设计约束:
 
@@ -24,6 +28,7 @@ import argparse
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -36,11 +41,14 @@ ROOT = Path(__file__).resolve().parent.parent
 
 DATA_DIRNAME = "data"
 
-COPY_FILES = ("config.toml",)
-"""从主仓库 ``data/`` 复制到工作区的配置文件.
+SHARED_DIR_VARS = ("AMANE_RESOURCES_DIR", "AMANE_MODELS_DIR")
+"""指向共享目录的配置项: 资源缓存与模型权重. 值从主仓库继承, 保证两边读到同一份."""
 
-只复制配置: ``resources/`` ``models/`` ``*.db`` 属于数据资产. 资源缓存由
-``AMANE_RESOURCES_DIR`` 共享, 数据库由每个工作区首启自建.
+SKIP_COPY = ("resources", "models")
+"""即使出现在 ``data/`` 里也不复制的子目录.
+
+正常布局下这两样已在 ``data`` 之外, 列在这里是给"还没搬的旧检出"兜底:
+照抄一份数 GB 缓存既慢又费盘, 而 ``.env`` 已经指向共享目录, 抄了也用不上.
 """
 
 
@@ -98,47 +106,99 @@ def set_env_var(env_path: Path, key: str, value: str) -> None:
     env_path.write_text("\n".join(kept) + "\n", encoding="utf-8")
 
 
-def shared_resources_dir(main: Path) -> Path:
-    """共享资源目录: 环境变量 > 主仓库 ``.env`` 的 ``AMANE_RESOURCES_DIR`` > 主仓库 ``data/resources``.
+def resolve_shared_var(main: Path, key: str, fallback: Path) -> Path:
+    """解析共享目录配置项: 环境变量 > 主仓库 ``.env`` > ``fallback``.
 
-    按这个顺序是因为资源可能已被搬到 ``data`` 之外共享: 此时主仓库 ``data/resources``
-    并不存在, 真正的路径只写在主仓库的 ``.env`` 里. 直接读它才能跟主仓库保持一致.
+    ``fallback`` 是"该配置项没设时程序自己会用的位置", 因此没设时它就是真实位置,
+    不会把工作区指到一个空目录.
     """
-    override = os.environ.get("AMANE_RESOURCES_DIR")
+    override = os.environ.get(key)
     if override and override.strip():
         return Path(override.strip())
-
-    main_env = main / ".env"
-    configured = read_env_file(main_env).get("AMANE_RESOURCES_DIR")
+    configured = read_env_file(main / ".env").get(key)
     if configured:
         return Path(configured)
+    return fallback
 
-    return main / DATA_DIRNAME / "resources"
 
-
-def copy_config_files(main: Path, *, force: bool) -> None:
-    """复制主仓库 ``data/`` 下的配置文件, 不触碰数据资产."""
+def copy_data_dir(main: Path, *, force: bool) -> None:
+    """整体复制主仓库的 ``data/``, 跳过共享目录与库的临时旁文件."""
     source_dir = main / DATA_DIRNAME
     if not source_dir.is_dir():
-        warn(f"主仓库没有 {source_dir}, 跳过配置复制")
+        warn(f"主仓库没有 {source_dir}, 跳过数据复制")
         return
     target_dir = ROOT / DATA_DIRNAME
-    for name in COPY_FILES:
-        source = source_dir / name
-        if not source.is_file():
-            warn(f"主仓库缺少 {source.name}, 跳过")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    copied = 0
+    skipped = 0
+    for entry in sorted(source_dir.iterdir()):
+        if entry.name in SKIP_COPY:
+            log(f"跳过 {DATA_DIRNAME}/{entry.name} (已移到 data 之外共享)")
             continue
-        target = target_dir / name
+        target = target_dir / entry.name
         if target.exists() and not force:
-            log(f"{DATA_DIRNAME}/{name} 已存在, 保留现有文件")
+            skipped += 1
             continue
-        target_dir.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
-        log(f"已复制 {DATA_DIRNAME}/{name}")
+        if entry.is_dir():
+            shutil.copytree(entry, target, dirs_exist_ok=True)
+        else:
+            shutil.copy2(entry, target)
+        copied += 1
+
+    if copied:
+        log(f"已复制 {DATA_DIRNAME}/ 下 {copied} 项")
+    if skipped:
+        log(f"{DATA_DIRNAME}/ 下 {skipped} 项已存在, 保留现有文件")
+
+
+def check_wal_checkpoint_free(db_path: Path) -> bool:
+    """主库旁是否残留未落盘的 WAL.
+
+    直接用 ``sqlite3`` 读文件头判断不够可靠, 这里只用文件大小做保守提示:
+    ``-wal`` 非空意味着主进程可能没来得及 checkpoint, 此时复制到的库里少了那部分事务.
+    """
+    wal = db_path.with_name(db_path.name + "-wal")
+    try:
+        return wal.stat().st_size == 0
+    except FileNotFoundError:
+        return True
+
+
+def warn_if_db_busy(main: Path) -> None:
+    """复制前提示主仓库可能仍在运行 —— 运行中的库拷出来可能是半截状态."""
+    db_path = main / DATA_DIRNAME / "amane.db"
+    if not db_path.is_file():
+        return
+    if check_wal_checkpoint_free(db_path):
+        return
+    warn("主仓库 amane.db 的 WAL 非空, 可能有进程正在写入; 复制到的库或许缺少最近的事务")
+    warn("建议先退出主仓库的服务再建工作区, 或事后在工作区里重新迁移")
+
+
+def verify_sqlite_copy() -> None:
+    """用 SQLite 的完整性检查把复制结果验一遍.
+
+    只对能打开且确实是 SQLite 的文件做: 复制期间被截断的文件会在这里报错,
+    而不是等到新工作区启动时才崩.
+    """
+    checked = 0
+    for db_path in sorted((ROOT / DATA_DIRNAME).glob("*.db")):
+        checked += 1
+        try:
+            with sqlite3.connect(f"file:{db_path}?mode=ro", uri=True) as conn:
+                result = conn.execute("PRAGMA quick_check").fetchone()
+        except sqlite3.DatabaseError as exc:
+            warn(f"{db_path.name} 无法打开: {exc}; 建议删除后由程序自建, 或重新复制")
+            continue
+        if result and result[0] != "ok":
+            warn(f"{db_path.name} 完整性检查未通过: {result[0]}")
+    if checked:
+        log(f"已校验 {DATA_DIRNAME}/ 下的 {checked} 个 SQLite 文件")
 
 
 def ensure_env_file(main: Path, *, force: bool) -> None:
-    """生成工作区 ``.env``: 以主仓库为模板, 再写入共享资源目录."""
+    """生成工作区 ``.env``: 以主仓库为模板, 再写入两个共享目录配置."""
     target = ROOT / ".env"
     if not target.exists() or force:
         for candidate in (main / ".env", main / ".env.dev"):
@@ -150,11 +210,16 @@ def ensure_env_file(main: Path, *, force: bool) -> None:
             target.write_text("", encoding="utf-8")
             log("主仓库无 .env/.env.dev, 已创建空 .env")
 
-    resources = shared_resources_dir(main)
-    if not resources.is_dir():
-        warn(f"共享资源目录不存在: {resources}; 首次刮削时会自动创建")
-    set_env_var(target, "AMANE_RESOURCES_DIR", resources.as_posix())
-    log(f".env AMANE_RESOURCES_DIR={resources.as_posix()}")
+    fallbacks = {
+        "AMANE_RESOURCES_DIR": main / DATA_DIRNAME / "resources",
+        "AMANE_MODELS_DIR": main / DATA_DIRNAME / "models",
+    }
+    for key in SHARED_DIR_VARS:
+        shared = resolve_shared_var(main, key, fallbacks[key])
+        if not shared.is_dir():
+            warn(f"共享目录不存在: {shared}; 首次使用时会自动创建")
+        set_env_var(target, key, shared.as_posix())
+        log(f".env {key}={shared.as_posix()}")
 
 
 def install_dependencies(*, enabled: bool) -> None:
@@ -201,7 +266,9 @@ def main() -> int:
         return 1
 
     log(f"主仓库: {main_checkout}")
-    copy_config_files(main_checkout, force=args.force)
+    warn_if_db_busy(main_checkout)
+    copy_data_dir(main_checkout, force=args.force)
+    verify_sqlite_copy()
     ensure_env_file(main_checkout, force=args.force)
     install_dependencies(enabled=not args.skip_install)
     log("完成")

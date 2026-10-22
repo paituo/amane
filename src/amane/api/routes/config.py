@@ -89,6 +89,7 @@ async def probe_config(req: ConfigProbeRequest, config: ConfigDep, runtime: Runt
         saved=config.hot,
         runtime=runtime,
         data_dir=config.cold.data_dir,
+        models_dir=config.cold.resolved_models_dir,
         db_path=config.cold.db_path,
         rec=recorder,
     )

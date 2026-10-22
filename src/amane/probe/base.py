@@ -104,12 +104,25 @@ class ProbeContext:
     """运行中的装配; 进程未起完整运行时为 ``None``, 探针退化为"只按配置检查"."""
 
     data_dir: Path
-    """模型缓存与业务库所在目录."""
+    """业务库与其它本机状态所在目录."""
 
     db_path: Path
     """业务库路径; 词索引与向量表都在这个文件 (向量另开 ``search_vec.db``)."""
 
     rec: Recorder
+
+    models_dir: Path | None = None
+    """内嵌模型权重所在目录. 可被多个检出共用, 因此不等同于 ``data_dir/models``.
+
+    留 ``None`` 时按 ``data_dir/models`` 处理, 这样只关心其它字段的构造点不必增加参数.
+    """
+
+    @property
+    def resolved_models_dir(self) -> Path:
+        """模型权重实际目录: ``models_dir`` 优先, 否则退回 ``data_dir/models``."""
+        if self.models_dir is not None:
+            return self.models_dir
+        return self.data_dir / "models"
 
 
 ProbeFn = Callable[[ProbeContext], AsyncIterator[ProbeEvent]]

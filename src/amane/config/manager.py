@@ -192,6 +192,14 @@ class ColdSettings(BaseSettings):
     库内只存相对路径, 因此换目录不影响既有记录.
     """
 
+    models_dir: Path | None = None
+    """内嵌模型权重根目录; 空则落在 ``data_dir/models``.
+
+    与 ``resources_dir`` 同理: 权重是要联网拉取的数亿字节, 每份检出各存一份既费盘
+    又要在新环境重下一次. 该目录只由权重加载器写入, 不含任何本机状态, 因此可以
+    被多个检出共用.
+    """
+
     log_dir: Path = Path("./logs")
 
     safe_dirs: list[Path] | Literal["ALLOW_ALL"] | None = None
@@ -254,6 +262,13 @@ class ColdSettings(BaseSettings):
         if self.resources_dir is not None:
             return self.resources_dir
         return self.data_dir / "resources"
+
+    @property
+    def resolved_models_dir(self) -> Path:
+        """模型权重实际根目录: ``models_dir`` 优先, 否则退回 ``data_dir/models``."""
+        if self.models_dir is not None:
+            return self.models_dir
+        return self.data_dir / "models"
 
 
 _PROXY_SCHEMES = frozenset({"http", "https", "socks4", "socks4a", "socks5", "socks5h"})
