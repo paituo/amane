@@ -1,0 +1,9 @@
+# Orca 仓库级配置: 新建工作树时如何准备开发环境.
+# 键的含义见 Orca 文档 "Repository hooks"; 用途说明见 docs/dev/orca-worktree.md.
+
+scripts:
+  # 新建工作树后自动执行: 复制配置、生成指向共享资源目录的 .env、同步依赖.
+  setup: python scripts/worktree_setup.py
+
+# 等 setup 跑完再启动 agent, 避免 agent 在依赖装好前就开始跑测试.
+setupAgentStartupPolicy: wait-for-setup
