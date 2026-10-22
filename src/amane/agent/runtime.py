@@ -20,10 +20,13 @@ from .task_ops import build_task_ops_capability
 from .tool_names import ToolNameAlias
 from .tools import AgentDeps, build_explore_toolset
 
-# 工具 / 输出校验重试: 框架默认 1, 此处拉高避免早停.
-_AGENT_RETRIES = 10_000
-# 关闭 request / tool_calls / token 等 UsageLimits (框架默认 request_limit=50).
-UNLIMITED_USAGE = UsageLimits(request_limit=None)
+# 工具 / 输出校验重试: 框架默认 1. 给有限预算而非无限, 否则免费模型吐非法工具名/参数时会反复
+# 重试烧到上万次请求 (原值 10_000). 回合步数熔断另由 AGENT_USAGE_LIMITS 兜底.
+_AGENT_RETRIES = 10
+# 回合内模型响应步数上限 (框架默认 50). 计的是 agent loop 步数, 不含 HTTP 传输重试; 与
+# _AGENT_RETRIES 双保险, 防止失控循环持续打满上游. 原为 None (无上限).
+_AGENT_REQUEST_LIMIT = 50
+AGENT_USAGE_LIMITS = UsageLimits(request_limit=_AGENT_REQUEST_LIMIT)
 
 _SYSTEM = """You are Amane's database exploration and library management assistant.
 You help users explore the media metadata SQLite database with read-only SQL, and may
@@ -90,8 +93,15 @@ def thinking_to_level(mode: AgentThinkingMode) -> ThinkingLevel:
 
 
 def resolve_model_settings(config: AgentConfig, *, session_thinking: AgentThinkingMode | None = None) -> ModelSettings:
-    """始终注入 ``config.max_tokens`` (避免提供商默认过小导致 length 截断). ``session_thinking`` 为 None 表示继承 ``config.thinking``; 有效值仍为 None 时不传 thinking."""
+    """始终注入 ``config.max_tokens`` (避免提供商默认过小导致 length 截断).
+
+    ``max_retries`` 非 None 时按请求下发传输层重试次数 (``0`` 表示只发一次), 对 OpenAI / Anthropic 等
+    各协议一并生效; None 时不传, 沿用 SDK 客户端自身的重试配置. ``session_thinking`` 为 None 表示继承
+    ``config.thinking``; 有效值仍为 None 时不传 thinking.
+    """
     settings: ModelSettings = {"max_tokens": config.max_tokens}
+    if config.max_retries is not None:
+        settings["max_retries"] = config.max_retries
     effective = config.thinking if session_thinking is None else session_thinking
     if effective is not None:
         settings["thinking"] = thinking_to_level(effective)
@@ -100,7 +110,12 @@ def resolve_model_settings(config: AgentConfig, *, session_thinking: AgentThinki
 
 def build_model(config: AgentConfig) -> Model:
     """不检查 api_key. 不传 ``http_client``: 传输客户端由 pydantic-ai 构造并托管, 与翻译共用协议映射."""
-    return build_llm_model(config.api_type, base_url=config.base_url, api_key=config.api_key, model=config.model)
+    return build_llm_model(
+        config.api_type,
+        base_url=config.base_url,
+        api_key=config.api_key,
+        model=config.model,
+    )
 
 
 def build_agent(config: AgentConfig) -> Agent[AgentDeps, str | DeferredToolRequests] | None:

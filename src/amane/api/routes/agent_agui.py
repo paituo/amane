@@ -38,6 +38,7 @@ from ag_ui.core import (
     ToolCallStartEvent,
     UserMessage,
 )
+from aiolimiter import AsyncLimiter
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import JsonValue
@@ -63,7 +64,7 @@ from ...agent.rows import (
     UserMessageRow,
     no_approvals,
 )
-from ...agent.runtime import UNLIMITED_USAGE, resolve_model_settings
+from ...agent.runtime import AGENT_USAGE_LIMITS, resolve_model_settings
 from ...agent.tools import AgentDeps
 from ...agent.trace import SessionStore
 from ...agent.usage import request_usage, turn_usage_from_run
@@ -179,6 +180,23 @@ class _RequestUsageRows(AbstractCapability[AgentDeps]):
 
 
 @dataclass
+class _RateLimitCapability(AbstractCapability[AgentDeps]):
+    """每次模型请求前按 ``config.rate_limit`` 平滑限速.
+
+    助理路径此前没有任何限速 (AgentConfig.rate_limit 无人消费), 多会话可并行各自打上游;
+    免费/不稳定模型额度薄, 单会话过快即触发持续限流. 桶容量 1, 严格平滑, 与翻译路径同构.
+    """
+
+    limiter: AsyncLimiter
+
+    async def before_model_request(
+        self, ctx: RunContext[AgentDeps], request_context: ModelRequestContext
+    ) -> ModelRequestContext:
+        await self.limiter.acquire()
+        return request_context
+
+
+@dataclass
 class _ReplayRows:
     """把 AG-UI 事件展开为回放行 (页面重建对话用).
 
@@ -275,7 +293,28 @@ async def run_agent_agui(
     deps = service._make_deps(session_id)
     store.set_turn_running(True)
 
+    completed = False
+
+    def save_interrupted_turn() -> None:
+        """失败/取消的回合也落权威历史.
+
+        ``on_complete`` 只在回合成功时调用, 而适配器把模型侧异常吞进 ``RUN_ERROR`` 事件后正常结束流
+        (见 pydantic-ai ``UIEventStream``: 异常只经 ``on_error`` 转事件, 不再重抛), 因此失败轮不会触发
+        ``except``. 不补这一步, 本轮用户输入既不进 ``messages.json`` 也不在下一轮 ``history`` 里,
+        一次 429 就等于把用户刚打的字抹掉, 模型上下文断开.
+
+        只补用户输入而不补半截助手/工具消息: 那些内容服务端并未合成完整 (失败可能发生在任何一步),
+        下一轮重跑会重新生成. 重试时 ``_new_messages`` 靠用户文本匹配裁掉已送部分, 不会重复发送.
+        """
+        new_requests: list[ModelMessage] = [
+            ModelRequest(parts=[UserPromptPart(content=text)]) for text in _new_user_texts(incoming)
+        ]
+        if new_requests:
+            store.save_messages([*history, *new_requests])
+
     async def on_complete(result: AgentRunResult[Any]) -> AsyncIterator[BaseEvent]:
+        nonlocal completed
+        completed = True
         store.save_messages(list(result.all_messages()))
         rows.usage = result.usage
         output = result.output
@@ -288,30 +327,49 @@ async def run_agent_agui(
         yield
 
     async def consume() -> None:
+        # 墙钟由本侧施加: run_stream 的 timeout 到点抛 RunTimedOut, 而它继承 RunCancelled,
+        # 适配器按取消处理 (发 RUN_CANCELLED 而非 RUN_ERROR), 页面会把超时显示成用户主动取消.
+        timeout_s = service.config.request_timeout
         try:
-            async for event in adapter.run_stream(
-                message_history=history,
-                deps=deps,
-                capabilities=[_RequestUsageRows(store=store)],
-                model_settings=resolve_model_settings(
-                    service.config, session_thinking=service.session_thinking(session_id)
-                ),
-                usage_limits=UNLIMITED_USAGE,
-                on_complete=on_complete,
-            ):
-                if isinstance(event, RunFinishedEvent) and rows.usage is not None:
-                    event.usage = [_token_usage(rows.usage)]
-                await store.append_row(
-                    AguiEventRow(type="agui", event=event.model_dump(mode="json", by_alias=True, exclude_none=True))
-                )
-                for row in rows.feed(event):
-                    await store.append_row(row)
+            async with asyncio.timeout(timeout_s):
+                async for event in adapter.run_stream(
+                    message_history=history,
+                    deps=deps,
+                    capabilities=[
+                        _RequestUsageRows(store=store),
+                        _RateLimitCapability(limiter=service.request_limiter()),
+                    ],
+                    model_settings=resolve_model_settings(
+                        service.config, session_thinking=service.session_thinking(session_id)
+                    ),
+                    usage_limits=AGENT_USAGE_LIMITS,
+                    on_complete=on_complete,
+                ):
+                    if isinstance(event, RunFinishedEvent) and rows.usage is not None:
+                        event.usage = [_token_usage(rows.usage)]
+                    await store.append_row(
+                        AguiEventRow(type="agui", event=event.model_dump(mode="json", by_alias=True, exclude_none=True))
+                    )
+                    for row in rows.feed(event):
+                        await store.append_row(row)
+            # 流正常结束但回合没成功 (模型侧 429 等): 适配器已把异常转成 RUN_ERROR 事件吞掉
+            if not completed:
+                save_interrupted_turn()
+        except TimeoutError:
+            save_interrupted_turn()
+            message = f"回合超过 {timeout_s:g} 秒仍未完成, 已终止"
+            await store.append_row(AguiEventRow(type="agui", event={"type": "RUN_ERROR", "message": message}))
+            await store.append_row(ErrorRow(type="error", message=message))
+            await store.append_row(no_approvals())
+            await runtime.repo.update_agent_session(session_id, status=AgentSessionStatus.ACTIVE)
         except asyncio.CancelledError:
+            save_interrupted_turn()
             await store.append_row(CancelledRow(type="cancelled"))
             await store.append_row(no_approvals())
             await runtime.repo.update_agent_session(session_id, status=AgentSessionStatus.ACTIVE)
             raise
         except Exception as exc:
+            save_interrupted_turn()
             await store.append_row(AguiEventRow(type="agui", event={"type": "RUN_ERROR", "message": str(exc)}))
             await store.append_row(ErrorRow(type="error", message=str(exc)))
             await store.append_row(no_approvals())

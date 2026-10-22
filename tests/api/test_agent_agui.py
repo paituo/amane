@@ -345,6 +345,99 @@ async def test_failed_turn_clears_pending_approvals(app: FastAPI, client: AsyncC
 
 
 @pytest.mark.asyncio
+async def test_request_limiter_shared_across_turns(app: FastAPI, client: AsyncClient) -> None:
+    """助理限速桶必须跨回合共用: 每回合各建一个时, 并发会话各自放行, 上游速率是配置值的数倍."""
+    service = await service_of(app, client)
+    first = service.request_limiter()
+    assert service.request_limiter() is first
+    # 改 rate_limit 后换新桶, 否则旧桶的周期一直沿用旧值
+    service.config = service.config.model_copy(update={"rate_limit": 10.0})
+    assert service.request_limiter() is not first
+
+
+@pytest.mark.asyncio
+async def test_turn_stops_at_request_timeout(app: FastAPI, client: AsyncClient) -> None:
+    """整回合墙钟上限: 到点终止回合, 落错误行, 且本轮用户输入仍进历史.
+
+    ``on_complete`` 不触发时 ``messages.json`` 靠失败路径补写, 超时与上游报错走同一条收尾.
+    """
+
+    async def slow(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[StreamItem]:
+        await asyncio.sleep(5)
+        yield "迟到的答复"
+
+    service = await service_of(app, client)
+    session = await service.create_session(title="timeout")
+    assert session.id is not None
+    _install_agent(service, slow)
+    # 绕过字段下界 (真实配置最小值 10 秒) 以便在用例内快速触发
+    service.config = service.config.model_copy(update={"request_timeout": 0.2})
+
+    await _run(client, session.id, [_user("在吗")])
+
+    store = service.store_for(session.id)
+    rows = store.read_events()
+    errors = [row for row in rows if isinstance(row, AguiEventRow) and row.event["type"] == "RUN_ERROR"]
+    assert errors and "超过" in str(errors[0].event["message"])
+    assert not service.is_turn_running(session.id)
+    history = store.load_messages()
+    assert history is not None
+    assert _user_prompts(history) == ["在吗"]
+
+
+@pytest.mark.asyncio
+async def test_request_timeout_none_disables_wall_clock(app: FastAPI, client: AsyncClient) -> None:
+    """``request_timeout`` 为 None 表示不设上限: 慢回合仍能正常完成."""
+
+    async def slow(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[StreamItem]:
+        await asyncio.sleep(0.3)
+        yield "答复"
+
+    service = await service_of(app, client)
+    session = await service.create_session(title="no-wall-clock")
+    assert session.id is not None
+    _install_agent(service, slow)
+    service.config = service.config.model_copy(update={"request_timeout": None})
+
+    events = await _run(client, session.id, [_user("在吗")])
+
+    assert "RUN_FINISHED" in _types(events)
+    assert not [row for row in service.store_for(session.id).read_events() if isinstance(row, ErrorRow)]
+
+
+@pytest.mark.asyncio
+async def test_failed_turn_persists_user_input(app: FastAPI, client: AsyncClient) -> None:
+    """失败回合也要落权威历史: ``on_complete`` 只在成功时调用, 否则 429 之后该轮输入消失, 上下文断裂."""
+
+    async def boom(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[StreamItem]:
+        raise RuntimeError("status_code: 429, model_name: glm-4.7-flash")
+        yield "不会到这里"
+
+    service = await service_of(app, client)
+    session = await service.create_session(title="failed-history")
+    assert session.id is not None
+    _install_agent(service, boom)
+
+    await _run(client, session.id, [_user("在吗")])
+
+    history = service.store_for(session.id).load_messages()
+    assert history is not None, "失败轮必须留下历史, 否则下一轮拿不到上下文"
+    assert _user_prompts(history) == ["在吗"]
+
+    # 重试: 客户端按契约回放整段会话, 服务端历史已含该输入 -> 不应重复送给模型
+    seen: list[list[ModelMessage]] = []
+
+    async def ok(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[StreamItem]:
+        seen.append(list(messages))
+        yield "在的"
+
+    _install_agent(service, ok)
+    await _run(client, session.id, [_user("在吗")])
+
+    assert _user_prompts(seen[-1]) == ["在吗"], "重试不得把同一句输入重发一遍"
+
+
+@pytest.mark.asyncio
 async def test_endpoint_failure_clears_pending_approvals(
     app: FastAPI, client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -35,6 +35,7 @@ def build_model(
 
     ``http_client`` 决定传输客户端归属: 传入时 provider 用它构造 SDK 客户端 (翻译路径由此携带
     proxy 与超时, 生命周期归调用方); 不传时由 pydantic-ai 构造并托管默认客户端 (助理路径).
+    传输层重试经 ``ModelSettings['max_retries']`` 按请求下发, 不在此处设置.
     不检查 ``api_key``: 为空时由 provider 回退环境变量.
     """
     match api_type:

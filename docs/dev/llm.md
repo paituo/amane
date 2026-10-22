@@ -1,7 +1,7 @@
 # LLM 能力
 
 > 入口: `src/amane/llm/`. 本文记录 LLM 接入层、dspy 边界, 以及翻译在刮削管线中的位置.
-> 配置分层见 [config.md](config.md), 刮削管线见 [task-system.md](task-system.md).
+> 上游限流 / 超时时的实际行为见 [llm-resilience.md](llm-resilience.md), 配置分层见 [config.md](config.md), 刮削管线见 [task-system.md](task-system.md).
 
 ## 端口抽象
 

@@ -12,6 +12,11 @@
     - [ ] 静态后继声明 (Feed 刮削成功后挂 UserTag 等)
     - [ ] 库级流水 (批次屏障 / 失败补偿) 仍待实现, 禁止事项见 [dev/task-system.md](dev/task-system.md)
 - 助理 Agent
+  - [x] 上游故障处理: 传输重试可配 (`agent.max_retries`); 失败与取消的回合同样写入 `messages.json`; 工具重试预算 `Agent.retries` 与请求上限 `UsageLimits` 分别设定
+  - [x] 接入 `agent.rate_limit`: 助理每次模型请求前经 `AsyncLimiter` 限速
+  - [ ] 上游错误分类: `ErrorRow` 增类别字段, 页面按类给出可操作文案与重试入口
+  - [ ] 端点自检区分限流 (可重试) 与配置错误
+  - 上游限流 / 超时的实际行为见 [llm-resilience.md](dev/llm-resilience.md)
 - 刮削与爬虫
 - 定时任务
 - 资源管理

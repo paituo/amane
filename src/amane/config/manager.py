@@ -826,6 +826,12 @@ class AgentConfig(BaseModel):
     max_tokens: int = Field(default=128_000, ge=1)
     """单次回复的输出上限. 超过模型上限时上游拒绝请求."""
 
+    max_retries: int | None = Field(default=None, ge=0, le=10)
+    """传输层重试次数, 经 ``ModelSettings['max_retries']`` 按请求下发, 对 OpenAI / Anthropic 等协议一并生效. None 表示沿用 SDK 客户端自身配置 (OpenAI 默认 2 次重试). 设为 0 可在首次 429 立即失败而非烧请求."""
+
+    request_timeout: float | None = Field(default=600.0, ge=10, le=3600)
+    """整回合墙钟上限 (秒), 由路由侧 ``asyncio.timeout`` 包住整个回合, 到点终止并为超时单独收尾. None 表示不设上限. 不用 ``run_stream(timeout=)``: 其到点抛的 ``RunTimedOut`` 继承 ``RunCancelled``, 会被当成用户主动取消."""
+
     rate_limit: float = Field(default=2.0, ge=0.1, le=100)
     sql_timeout_ms: int = Field(default=1000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
     """只读 SQL 默认超时 (毫秒). 超过须用户批准放宽."""
@@ -842,10 +848,9 @@ class AgentConfig(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def _drop_legacy_fields(cls, data: Any) -> Any:
-        """丢弃已移除的 enabled / max_retries."""
+        """丢弃已移除的 enabled (max_retries 已恢复为正式字段)."""
         if isinstance(data, dict):
             data.pop("enabled", None)
-            data.pop("max_retries", None)
         return data
 
 

@@ -27,7 +27,7 @@ dependencies = [
     "fastapi>=0.136.0",
     "uvicorn[standard]>=0.46.0",
     "httpx2[socks]>=2.2.0",
-    "pydantic-ai-slim[ag-ui,anthropic,openai]>=2.27.0",
+    "pydantic-ai-slim[ag-ui,anthropic,openai]>=2.59.0",
     "sqlalchemy[asyncio]>=2.0.51",
     "feedparser>=6.0.14",
     "packaging>=26.3",
@@ -65,6 +65,9 @@ docs = [
 
 [tool.uv]
 package = true
+# anthropic 2.x 把 BetaMessageParam 改为 TypeAlias, pydantic-ai 仍按构造函数调用, Anthropic 协议路径会在
+# 发出请求前抛 TypeError. 上游声明 anthropic>=1.12.1 没有上界, 故在此约束传递依赖.
+constraint-dependencies = ["anthropic<2"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/amane"]

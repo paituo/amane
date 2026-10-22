@@ -800,6 +800,14 @@
         "label": "最大输出 token",
         "description": "单次回复的输出上限. 超过模型上限时上游拒绝请求"
       },
+      "max_retries": {
+        "label": "传输层重试次数",
+        "description": "首次请求之外的重试次数, 留空沿用 SDK 默认 (两次). 设为 0 可在首次限流时立即失败"
+      },
+      "request_timeout": {
+        "label": "回合超时 (秒)",
+        "description": "单次对话回合的最大耗时, 到点终止并提示重试. 留空表示不设上限"
+      },
       "rate_limit": {
         "label": "每秒请求上限",
         "description": "参考供应商说明, 过高可能触发限流"

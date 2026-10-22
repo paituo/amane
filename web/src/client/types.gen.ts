@@ -450,6 +450,14 @@ export type AgentConfig = {
      */
     max_tokens?: number;
     /**
+     * Max Retries
+     */
+    max_retries?: number | null;
+    /**
+     * Request Timeout
+     */
+    request_timeout?: number | null;
+    /**
      * Rate Limit
      */
     rate_limit?: number;
