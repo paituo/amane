@@ -11,7 +11,8 @@
     uv run python scripts/requeue_failed_scrapes.py --apply --limit 50
 
 写入形态: ``status=QUEUED``、``retries=0``、``retry_at=now+[0,600)s`` 随机, ``error`` / ``result`` 保留.
-同一媒体文件只重排最新的一条失败任务, 其余保持 ``FAILED``, 避免同一文件被重复刮削.
+同一媒体文件只重排最新的一条失败任务, 其余保持 ``FAILED``; 该文件若已有排队中/运行中的任务也跳过,
+避免同一文件被重复刮削 (队列没跑完时重复执行本脚本的情形).
 """
 
 from __future__ import annotations
@@ -59,9 +60,23 @@ def _reason_key(outcomes: list[SiteOutcomeRecord]) -> str:
     return " + ".join(parts)
 
 
+def _active_keys(conn: sqlite3.Connection) -> tuple[set[Any], set[Any]]:
+    """已在排队/运行中的任务所占据的键, 分 ``media_file_id`` 与 ``number`` 两套."""
+    media_ids: set[Any] = set()
+    numbers: set[Any] = set()
+    for row in conn.execute("select payload from tasks where status in ('QUEUED', 'RUNNING')"):
+        payload = json.loads(row["payload"] or "{}")
+        if payload.get("media_file_id") is not None:
+            media_ids.add(payload["media_file_id"])
+        if payload.get("number"):
+            numbers.add(payload["number"])
+    return media_ids, numbers
+
+
 def _pick_candidates(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], Counter[str], Counter[str]]:
     """返回 (待重排行, 判定统计, 排除原因统计)."""
     pending = {row[0] for row in conn.execute("select id from media_files where status = 'PENDING'")}
+    active_media, active_numbers = _active_keys(conn)
     skipped: Counter[str] = Counter()
     shapes: Counter[str] = Counter()
     latest: dict[Any, sqlite3.Row] = {}
@@ -76,15 +91,22 @@ def _pick_candidates(conn: sqlite3.Connection) -> tuple[list[sqlite3.Row], Count
         if media_id is not None and media_id not in pending:
             skipped["媒体文件已不是 PENDING"] += 1
             continue
+        key = media_id if media_id is not None else payload.get("number")
+        # 该文件已有一条在队/运行中的任务时再排一条, 只会让同一文件被并发刮削两次.
+        if key in (active_media if media_id is not None else active_numbers):
+            skipped["该文件已有排队/运行中的任务"] += 1
+            continue
         if not is_environmental_failure(_parse_outcomes(row["result"])):
             skipped["失败原因不可重排"] += 1
             continue
-        shapes[_reason_key(_parse_outcomes(row["result"]))] += 1
-        key = media_id if media_id is not None else payload.get("number")
         # 同一键只保留最新一条: 旧行保持 FAILED, 作为历史留档.
         latest[key] = row
 
-    return list(latest.values()), shapes, skipped
+    # 形态统计放在去重之后, 否则同一文件的多次失败会重复计入, 与「待重排 N 条」对不上.
+    for row in latest.values():
+        shapes[_reason_key(_parse_outcomes(row["result"]))] += 1
+
+    return sorted(latest.values(), key=lambda item: item["id"]), shapes, skipped
 
 
 def main() -> int:

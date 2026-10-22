@@ -7,7 +7,10 @@ set shell := ["pwsh", "-NoProfile", "-Command"]
 default:
     @just --list
 
-CHECK_DIRS := "src/amane tests scripts"
+# 必须与「ruff 实际覆盖的仓库范围」一致: ruff 会连同 docs/ 下 .md 的代码块一起格式化
+# （docstring-code-format 的同类行为）, 只查三个目录会让 `just lint` 绿而 `ruff format --check .` 红,
+# 谁跑一次全仓格式化就散落一堆与提交无关的漂移.
+CHECK_DIRS := "src/amane tests scripts skills docs"
 
 host := env("AMANE_HOST", "127.0.0.1")
 port := env("AMANE_PORT", "8000")

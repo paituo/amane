@@ -86,6 +86,10 @@ just bump-dry patch          # 预览下一版本
 ```
 
 formatter/linter 不通过时优先使用 `just fix` 自动修复, 不要手动改
+`just lint` 的 `CHECK_DIRS` 必须覆盖 ruff 实际扫到的全部仓库内容 (含 `docs/` 下 md 的代码块与 `skills/`),
+否则 `just lint` 绿而 `ruff format --check .` 红, 跑一次全仓格式化就散落与提交无关的漂移.
+ruff 会把 `except (A, B):` 改写成 PEP 758 的 `except A, B:` (仅 3.14+ 可解析), 需要兼容旧解释器的
+文件在行尾加 `# fmt: skip`.
 发版前更新 `CHANGELOG.md`, 只用 `just bump`, 不要手改版本或手打 tag; Android APP 的版本与 tag 独立, 见 [android.md](docs/dev/android.md)
 
 ## 开发规范

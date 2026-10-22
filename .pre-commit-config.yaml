@@ -1,10 +1,11 @@
 # 配置格式兼容 prek (执行方) 与 pre-commit; 门禁见 scripts/githooks/ 下的同名 shim.
 #
 # 每个钩子只在相关文件变化时运行 (files 过滤, 见 prek docs#files):
-# - src/amane 后端源码变化 → 重新生成 OpenAPI + TS client
-# - Python 文件变化 → ruff 修复/检查 + ty 类型检查
-# - web/ 下任何文件变化 → oxfmt/oxlint 修复 + web 全量检查
-# - 其余文件 (docs/md、yaml、Dockerfile 等) 不触发任何钩子
+# - src/amane 后端源码变化 → 重新生成 OpenAPI + TS client (会重写 web/src/client/*.gen.ts)
+# - Python 文件 / docs 下 md 变化 → ruff 修复/检查 (md 里的代码块同样被 ruff 格式化与检查) + ty
+# - web/ 或 src/amane 下任何文件变化 → oxfmt/oxlint 修复 + web 全量检查
+#   (src/amane 必须一起进来: 上面重新生成的产物若不经过 oxfmt/tsc, 就会出现「本地绿、CI 红」)
+# - 其余文件 (其它 md、yaml、Dockerfile 等) 不触发任何钩子
 #
 # 按耗时分流, 不按覆盖面: pyright 与 ty 都做完整类型检查, pyright 慢, 与测试同在 pre-push (文件集取推送范围对
 # 远程 ref 的差异, 一次推送只运行一次); 提交阶段只留生成物、ruff 与 ty, 测试只运行 just test, coverage 留给 just check / CI.
@@ -28,7 +29,7 @@ repos:
         entry: just fix-python
         language: system
         pass_filenames: false
-        files: '\.(py|pyi)$|^ruff\.toml$'
+        files: '\.(py|pyi)$|^ruff\.toml$|^docs/.*\.md$'
         stages: [pre-commit]
 
       - id: fix-web
@@ -36,7 +37,7 @@ repos:
         entry: just fix-web
         language: system
         pass_filenames: false
-        files: '^web/'
+        files: '^(web/|src/amane/)'
         stages: [pre-commit]
 
       - id: lint
@@ -44,7 +45,7 @@ repos:
         entry: just lint
         language: system
         pass_filenames: false
-        files: '\.(py|pyi)$|^ruff\.toml$'
+        files: '\.(py|pyi)$|^ruff\.toml$|^docs/.*\.md$'
         stages: [pre-commit]
 
       - id: ty
@@ -60,7 +61,7 @@ repos:
         entry: just check-web
         language: system
         pass_filenames: false
-        files: '^web/'
+        files: '^(web/|src/amane/)'
         stages: [pre-commit]
 
       - id: pyright
