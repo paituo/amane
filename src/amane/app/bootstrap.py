@@ -235,7 +235,7 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
 
     playback_state = PlaybackState()
     # 检索栈: 开关全关时为 None, 写入与查询都退回旧路径. 预热与回填都在后台跑, 不挡启动.
-    search_stack = build_search(hot, repo, cold.db_path, cold.data_dir)
+    search_stack = build_search(hot, repo, cold.db_path, cold.data_dir, models_dir=cold.resolved_models_dir)
     if search_stack is not None:
         await search_stack.store.open()
         repo.set_index_sink(search_stack.indexer)

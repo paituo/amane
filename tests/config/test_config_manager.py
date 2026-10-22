@@ -99,6 +99,21 @@ class TestColdSettings:
             s = ColdSettings(data_dir=tmp_path / "data")
         assert s.resolved_resources_dir == shared
 
+    def test_models_dir_defaults_to_data_dir(self):
+        """未设置时模型目录仍是 data_dir/models.
+
+        同样显式传 ``models_dir=None`` 以隔离开发机配置.
+        """
+        s = ColdSettings(data_dir=Path("/srv/amane/data"), models_dir=None)
+        assert s.resolved_models_dir == Path("/srv/amane/data/models")
+
+    def test_models_dir_env_outside_data_dir(self, tmp_path: Path):
+        """AMANE_MODELS_DIR 可指向 data 之外, 多个检出共用一份模型权重."""
+        shared = tmp_path / "shared-models"
+        with patch.dict(os.environ, {"AMANE_MODELS_DIR": str(shared)}, clear=False):
+            s = ColdSettings(data_dir=tmp_path / "data")
+        assert s.resolved_models_dir == shared
+
 
 class TestBuildSafeDirs:
     """build_safe_dirs: ALLOW_ALL / 显式路径 / library 回退."""
