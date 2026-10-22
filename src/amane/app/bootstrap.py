@@ -151,7 +151,11 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
     http_client = stack.http_client
     factory = stack.factory
 
-    resource_store = ResourceStore(engine=engine, base_dir=cold.data_dir / "resources")
+    resource_store = ResourceStore(
+        engine=engine,
+        base_dir=cold.resolved_resources_dir,
+        data_dir=cold.data_dir,
+    )
 
     # 独立 SQLite, 不纳入 Alembic; 删除文件即清空. 惰性建连.
     translation_cache = TranslationCache(cold.data_dir / "translations.db")

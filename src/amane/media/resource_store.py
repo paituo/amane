@@ -102,9 +102,15 @@ class UpscaleOutcome(StrEnum):
 
 
 class ResourceStore:
-    def __init__(self, engine: AsyncEngine, base_dir: Path):
+    def __init__(self, engine: AsyncEngine, base_dir: Path, *, data_dir: Path | None = None):
+        """``base_dir`` 是资源缓存根目录; ``data_dir`` 是超分等工具的数据目录.
+
+        ``base_dir`` 可以不在 ``data_dir`` 之下 (见 ``ColdSettings.resources_dir``),
+        因此 ``data_dir`` 不再从 ``base_dir.parent`` 推导, 由调用方显式给出.
+        """
         self._engine = engine
         self._base_dir = base_dir
+        self._data_dir = data_dir if data_dir is not None else base_dir.parent
         self._guards: dict[str, _LockEntry] = {}
         self._guards_lock = asyncio.Lock()
         base_dir.mkdir(parents=True, exist_ok=True)
@@ -146,7 +152,7 @@ class ResourceStore:
 
     @property
     def data_dir(self) -> Path:
-        return self._base_dir.parent
+        return self._data_dir
 
     async def resolve(self, url: str) -> Path | None:
         async with self._session() as session:

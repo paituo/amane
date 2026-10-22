@@ -12,6 +12,8 @@
 
 `data_dir` 不允许放入热配置: 切换目录须迁移 DB、resources 与未完成任务. 判据是 Cold = 派生路径 / 进程级绑定, Hot = 行为参数.
 
+`AMANE_RESOURCES_DIR` 把资源缓存移出 `data_dir` (空 = `data_dir/resources`), 用于多个检出共享同一份缓存: `resources` 表只存相对路径, 换目录不影响既有记录; 但 `ResourceStore` 不再能从 `base_dir.parent` 推出 `data_dir` (超分工具目录), 故构造时显式传入. 该目录**不加入** `safe_dirs` —— 资源缓存不是路径模板的写出目标, 加进去只会扩大文件浏览器边界. 工作树如何自动获得该变量见根目录 `orca.yaml` 与 `scripts/worktree_setup.py`.
+
 ## API token (`AMANE_TOKEN`, Cold)
 
 API 鉴权是冷配置: 中间件在请求路径上, 不能在进程内 rebuild 中替换.

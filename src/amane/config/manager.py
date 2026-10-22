@@ -184,6 +184,14 @@ class ColdSettings(BaseSettings):
 
     data_dir: Path = Path("./data")
 
+    resources_dir: Path | None = None
+    """资源缓存根目录; 空则落在 ``data_dir/resources``.
+
+    独立设置的价值在于把它放到 data 之外共享: 多个检出 (如 git worktree) 各自持有
+    独立的库与配置, 却引用同一批已下载的图片, 不必为每份检出各存一份数 GB 缓存.
+    库内只存相对路径, 因此换目录不影响既有记录.
+    """
+
     log_dir: Path = Path("./logs")
 
     safe_dirs: list[Path] | Literal["ALLOW_ALL"] | None = None
@@ -239,6 +247,13 @@ class ColdSettings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "amane.db"
+
+    @property
+    def resolved_resources_dir(self) -> Path:
+        """资源缓存实际根目录: ``resources_dir`` 优先, 否则退回 ``data_dir/resources``."""
+        if self.resources_dir is not None:
+            return self.resources_dir
+        return self.data_dir / "resources"
 
 
 _PROXY_SCHEMES = frozenset({"http", "https", "socks4", "socks4a", "socks5", "socks5h"})

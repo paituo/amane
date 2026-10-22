@@ -83,6 +83,18 @@ class TestColdSettings:
         with patch.dict(os.environ, {"AMANE_SAFE_DIRS": ""}), pytest.raises(ValidationError):
             ColdSettings(safe_dirs=123)  # type: ignore[arg-type]
 
+    def test_resources_dir_defaults_to_data_dir(self):
+        """未设置时资源目录仍是 data_dir/resources, 既有部署行为不变."""
+        s = ColdSettings(data_dir=Path("/srv/amane/data"))
+        assert s.resolved_resources_dir == Path("/srv/amane/data/resources")
+
+    def test_resources_dir_env_outside_data_dir(self, tmp_path: Path):
+        """AMANE_RESOURCES_DIR 可指向 data 之外, 供多个检出共享同一份资源缓存."""
+        shared = tmp_path / "shared-resources"
+        with patch.dict(os.environ, {"AMANE_RESOURCES_DIR": str(shared)}, clear=False):
+            s = ColdSettings(data_dir=tmp_path / "data")
+        assert s.resolved_resources_dir == shared
+
 
 class TestBuildSafeDirs:
     """build_safe_dirs: ALLOW_ALL / 显式路径 / library 回退."""
