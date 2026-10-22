@@ -48,6 +48,7 @@ def _service(repo: Repository, client: EverythingClient) -> WatcherService:
         check_interval=0.05,
         everything_config=EverythingConfig(poll_interval=5),
         everything_client=client,
+        everything_autostart=False,
     )
 
 

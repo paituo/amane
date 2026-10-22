@@ -82,6 +82,7 @@ class WatcherService:
         observer_timeout: float = 1.0,
         everything_config: EverythingConfig | None = None,
         everything_client: EverythingClient | None = None,
+        everything_autostart: bool = True,
     ):
         self._repo = repo
         self._event_bus = event_bus
@@ -95,6 +96,7 @@ class WatcherService:
         self._debounce_task: asyncio.Task | None = None
         self._everything_task: asyncio.Task[None] | None = None
         self._everything: EverythingClient | None = everything_client
+        self._everything_autostart = everything_autostart
         self._cloud_routes: dict[int, CloudDriveRoute] = {}
         self._everything_routes: dict[int, EverythingRoute] = {}
         self._running = False
@@ -172,6 +174,8 @@ class WatcherService:
         return self._everything
 
     def _ensure_everything_task(self) -> None:
+        if not self._everything_autostart:
+            return
         if self._everything_task is not None:
             return
         try:

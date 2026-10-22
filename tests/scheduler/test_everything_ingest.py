@@ -38,13 +38,22 @@ def _service(repo: Repository, client: EverythingClient) -> WatcherService:
         check_interval=0.05,
         everything_config=EverythingConfig(poll_interval=5),
         everything_client=client,
+        everything_autostart=False,
     )
 
 
 @pytest.mark.asyncio(loop_scope="function")
 async def test_start_registers_everything_without_observer(repo: Repository, tmp_path: Path) -> None:
     lib = await repo.create_library(name="es", path=str(tmp_path), ingest=LibraryIngest.EVERYTHING)
-    service = _service(repo, _stub_client(tmp_path))
+    # 本用例验证的是自动轮询任务被挂上, 与其余用例手动驱动轮询相斥, 故显式开启.
+    service = WatcherService(
+        repo,
+        EventBus(),
+        use_polling=True,
+        everything_config=EverythingConfig(poll_interval=5),
+        everything_client=_stub_client(tmp_path),
+        everything_autostart=True,
+    )
     try:
         await service.start()
         assert service._watcher is None
@@ -136,7 +145,15 @@ async def test_ingest_switch_swaps_channel(repo: Repository, tmp_path: Path) -> 
     lib = await repo.create_library(name="es", path=str(tmp_path), ingest=LibraryIngest.NATIVE)
     lib_id = lib.id
     assert lib_id is not None
-    service = _service(repo, _stub_client(tmp_path))
+    # 末尾断言切回 everything 会重新挂上轮询任务, 故保留自动启动.
+    service = WatcherService(
+        repo,
+        EventBus(),
+        use_polling=True,
+        everything_config=EverythingConfig(poll_interval=5),
+        everything_client=_stub_client(tmp_path),
+        everything_autostart=True,
+    )
 
     async def switch(ingest: LibraryIngest, cloud_path: str | None = None) -> None:
         updated = await repo.update_library(lib_id, ingest=ingest, cloud_path=cloud_path)
