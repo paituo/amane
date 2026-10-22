@@ -46,7 +46,7 @@ CrawlerFactory (缓存实例)
 
 ## 连通性探测
 
-`Crawler.check_connectivity` / `ActorCrawler.check_connectivity` 是「网络检测」页的逐来源探测点, 缺省 GET `base_url` 并带上已合并的 cookies 与 headers, 与刮削同用一条 HTTP 通道 (代理 / 指纹 / 限速 / 同源 Referer), 判定复用 `net/errors.py` 的拦截分类. **实际入口不是 `base_url` 的来源必须覆盖它**, 否则会把「入口 404 / 是 API 端点」误报成不可达; 缺凭据的来源返回 `SKIPPED` 并给出 `SkipReason`. 探测是单次尝试 (重试只会把同一个结论拖长), 编排与端点见 [api.md](api.md) 的 `/network/check`.
+`Crawler.check_connectivity` / `ActorCrawler.check_connectivity` 是「网络检测」页的逐来源探测点, 缺省 GET `base_url` 并带上已合并的 cookies 与 headers, 与刮削同用一条 HTTP 通道 (代理 / 指纹 / 限速 / 同源 Referer), 判定复用 `net/errors.py` 的拦截分类. **实际入口不是 `base_url` 的来源必须覆盖它**, 否则会把「入口 404 / 是 API 端点」误报成不可达, 也会把入口被拦截当成整站不可达; 缺凭据的来源返回 `SKIPPED` 并给出 `SkipReason`. 探测点取**实际承担检索的那个入口**: minnano 的 `search_result.php` 处于 Cloudflare 挑战保护, 探测它恒报 `cloudflare_challenge`, 而检索已改由一览页索引承担, 因此探测 `actress_list.php`. 探测是单次尝试 (重试只会把同一个结论拖长), 编排与端点见 [api.md](api.md) 的 `/network/check`.
 
 ## 番号入参
 
@@ -68,6 +68,8 @@ CrawlerFactory (缓存实例)
 - 番号: 站内 ID 带 `-` 时, 入参 `HEYZO-3607` 与 `HEYZO3607` 都应能对上 (大小写, 短横线与空格不参与比对). 不允许把 `_` 改写为 `-`, 除非该站把两种当成同一部. 欧美日期号 (`Studio.YY.MM.DD`) 的年份 2 位与 4 位写法, 以及 FC2 的 `FC2-PPV-<id>` 与 `FC2-<id>` (官方电子市场只写带 `PPV` 的写法, 索引站多写不带的写法), 都视为同一番号. 比对与归一用 `crawlers/parsing.py` 的 `fold_number` / `is_same_number` / `fc2_article_id` / `leading_token`.
 - 检索形态: 站内写法省略番号开头的数字段时比对放宽到「仅差数字段」, 由 `select_number_index` 取条目 (精确优先, 仅差数字段者唯一时才取). 检索词与 URL 随形态而变的来源按 `crawlers/parsing.py::number_variants` 逐个形态尝试, 命中即止; 候选只由 FC2 的两种写法, 站点省略的数字段与素人系标签 (`parsing/file_info.py::SUREN_LABELS`) 三处产生. 已知站内只写某一种写法的来源把该写法排在首位 (如 airav 的 `FC2-PPV-<id>`), 少发一次请求.
 - 演员: 检索行或实体的名字 (含别名) 与查找名相等才算命中, 用 `normalize_name` / `fold_name` / `is_same_name`; 站内的注记括号, 拆名规则由各站自行剥离.
+- **本地索引**: 检索入口处于拦截保护时 (minnano 的 `search_result.php` 对任何 TLS 指纹都返回 403 挑战页, 只能执行 JS 越过), 检索改由不受保护的站内索引页构建: 分页抓一览页 `actress_list.php?page=N`, 取其 JSON-LD 里的 `ItemList` 条目建立「折叠艺名 → 详情页」映射, 落盘缓存并按 TTL 重建以收录新增女优; 原站内检索保留为索引未命中时的回退. 索引与站内检索的键同源, 因此命中范围一致.
+  索引**永远不阻塞查询**: 过期缓存立即作为兜底返回 (命中旧名照常不出网), 重建在后台进行; 冷启动无缓存时以空索引占位 (期间查询降级到站内检索, 该入口可能被拦截), 后台建好后自动替换. 重建由 `ActorCrawler.warmup()` 触发, 而该钩子挂在 `CrawlerFactory.get_actor_crawlers` (真实刮削) 而非 `get_actor` (连通性探测也走它), 否则点一次「检测连通性」就会在后台掀起一次全站抓取. 失败按 5 分钟起倍增到 1 小时冷却重试; 新索引不足现有规模一半视为残缺 (大量分页失败), 不替换旧索引 — 否则 2 万多名女优会静默消失.
 - 确认不了的结果视为该来源无此番号 / 无此演员, 不允许回退首条. 站点特例见 [content-routes.md](content-routes.md).
 
 ## HTTP 层
@@ -106,7 +108,7 @@ Cloudflare managed challenge 只能执行 JS 越过, 因此受保护的来源经
 
 同一来源的连续请求复用同一个浏览器 context (solver 复用同名会话); 引擎惰性启动, camoufox 浏览器二进制在首次启动时下载, 空闲及进程退出 / 热重建时释放. 浏览器池只在 `network.browser` / `proxy` 变化时重建, 其余热重载保留已解决的 clearance; solver 经注入的 `WebClient` 出站, 地址来自 `network.browser.solver_url`, 不允许暴露到公网. FlareSolverr 的会话就是 solver 服务里的一张浏览器标签, 同一会话的并发页面请求会互相覆盖导航, 导致所有调用方读到同一份正文, 且以成功响应返回, 因此同一来源的并发渲染在 `SolverBackend` 里按会话排队.
 
-改用浏览器的来源 (auto 切换后或 always) 实际入口不是 `base_url` 时必须覆盖 `check_connectivity` (如 minnano 探测 `search_result.php`), 否则首页可达会掩盖入口不可达. 插件来源没有浏览器入口, 始终使用 HTTP. `browser` 可选依赖不随 Docker 与桌面打包分发, 这两处只能用 `solver`.
+改用浏览器的来源 (auto 切换后或 always) 实际入口不是 `base_url` 时必须覆盖 `check_connectivity`, 否则首页可达会掩盖入口不可达. 浏览器启动参数里的代理地址会先过 `_browser_proxy`: `socks5h://` / `socks4a://` 是 curl 专有写法, Chromium 不认这两个 scheme, 原样传入会让每次导航以 `ERR_NO_SUPPORTED_PROXIES` 失败 (浏览器的 SOCKS 代理本就由代理端解析域名, 去掉后缀等价). 插件来源没有浏览器入口, 始终使用 HTTP. `browser` 可选依赖不随 Docker 与桌面打包分发, 这两处只能用 `solver`.
 
 ## 外部 API 读模型
 

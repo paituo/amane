@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 
+from amane.crawlers.actor import actor_registry
+from amane.crawlers.actor.base import ActorCrawler
 from amane.crawlers.base import Crawler, CrawlerProfile
 from amane.crawlers.factory import CrawlerFactory
 from amane.crawlers.registry import registry
@@ -87,3 +89,54 @@ async def test_theporndb_film_and_actor_are_distinct_instances(http_client):
     assert isinstance(film, ThePornDBCrawler)
     assert isinstance(actor, ThePornDBActorCrawler)
     assert film is not actor
+
+
+class _WarmActorCrawler(ActorCrawler):
+    """记录 warmup 调用的演员来源替身."""
+
+    warmed = 0
+
+    @classmethod
+    def profile(cls) -> CrawlerProfile:
+        return CrawlerProfile(name=cast("SiteName", "fake_warm_actor"), base_url="https://warm.example.com")
+
+    async def warmup(self) -> None:
+        type(self).warmed += 1
+
+    async def _search(self, name: str) -> str | None:
+        return None
+
+    async def _scrape(self, url: str) -> None:
+        return None
+
+
+@pytest.fixture
+def _register_warm_actor():
+    """注册假演员来源并在测试后清理."""
+    actor_registry.register(_WarmActorCrawler)
+    _WarmActorCrawler.warmed = 0
+    yield
+    actor_registry._classes.pop("fake_warm_actor", None)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_connectivity_probe_does_not_trigger_warmup(http_client, _register_warm_actor) -> None:
+    """探测途经 get_actor: 不应预热, 否则点一次「检测连通性」就会在后台掀起全站抓取."""
+    factory = CrawlerFactory(http_client)
+    await factory.get_actor("fake_warm_actor")
+    assert factory._actor_warm_tasks == {}
+    assert _WarmActorCrawler.warmed == 0
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_actor_scrape_triggers_warmup(http_client, _register_warm_actor) -> None:
+    """真实刮削取实例时 fire-and-forget 预热; 重复取用不叠加任务."""
+    factory = CrawlerFactory(http_client)
+    assert await factory.get_actor_crawlers(["fake_warm_actor"])
+    await factory._actor_warm_tasks["fake_warm_actor"]
+    assert _WarmActorCrawler.warmed == 1
+
+    await factory.get_actor_crawlers(["fake_warm_actor"])
+    first = factory._actor_warm_tasks["fake_warm_actor"]
+    await first
+    assert _WarmActorCrawler.warmed == 2, "上一次已结束, 允许再预热 (索引可能又过期)"

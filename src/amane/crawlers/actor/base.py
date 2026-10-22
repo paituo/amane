@@ -59,6 +59,14 @@ class ActorCrawler(ABC):
             return None
         return await self._scrape(url)
 
+    async def warmup(self) -> None:  # noqa: B027  # 有意留空的可选钩子, 非抽象
+        """刮削前预热钩子. 默认无操作.
+
+        需要后台预载的来源 (如本地索引) 覆盖本方法; ``get_actor_crawlers`` 取到实例后
+        即 fire-and-forget 触发, 让索引在本次刮削期间于后台就绪, 且不阻塞刮削本身.
+        连通性探测走 ``get_actor``, 不触发本钩子, 以免探测引发全站抓取.
+        """
+
     async def check_connectivity(self) -> ConnectivityOutcome:
         """连通性自检: 缺省 GET ``base_url``, 用与刮削相同的视图 (渲染来源经浏览器)."""
         return await self.client.check(self.base_url, cookies=self.cookies, headers=self.headers)

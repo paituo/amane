@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,7 +13,7 @@ from ..net.connectivity import ConnectivityOutcome, SkipReason, probe_get
 from ..plugins.api import FilmSourceProvider, PluginContext
 from ..plugins.manager import PluginManager
 from ..plugins.models import PluginConfig, SourceDescriptor
-from .actor import ActorFetcher, GFriendsActorCrawler, actor_registry
+from .actor import ActorFetcher, GFriendsActorCrawler, MinnanoActorCrawler, actor_registry
 from .base import Crawler
 from .registry import registry
 from .sites import R18DevCrawler
@@ -28,6 +29,14 @@ if TYPE_CHECKING:
     from .r18dev import R18Database
 
 logger = structlog.get_logger()
+
+
+async def _warm_actor(name: str, crawler: ActorCrawler) -> None:
+    """执行来源预热; 失败只记录, 不冒泡 (预热是尽力而为的加速, 不影响来源可用性)."""
+    try:
+        await crawler.warmup()
+    except Exception:
+        logger.exception("actor warmup failed", name=name)
 
 
 class _PluginProviderAdapter(FilmSourceProvider):
@@ -94,6 +103,8 @@ class CrawlerFactory:
         self._plugin_configs = plugin_configs or {}
         self._instances: dict[str, Crawler | FilmSourceProvider] = {}
         self._actor_instances: dict[str, ActorCrawler] = {}
+        # 启动期预热任务引用: 避免 fire-and-forget 任务被 GC, 也便于关闭时回收.
+        self._actor_warm_tasks: dict[str, asyncio.Task[None]] = {}
 
     async def get(self, name: str) -> Crawler | FilmSourceProvider | None:
         """内置来源与插件来源共用一份实例缓存; 分派只在此处, 下游只依赖结构性协议."""
@@ -177,9 +188,14 @@ class CrawlerFactory:
                 data_dir=self._data_dir,
                 repo_url=self._gfriends_repo,
             )
+        elif cls is MinnanoActorCrawler:
+            # 女优一览索引落盘, 避免每次进程重建都重抓全站.
+            instance = MinnanoActorCrawler(client=client, config=site_config, data_dir=self._data_dir)
         else:
             instance = cls(client=client, config=site_config)
         self._actor_instances[name] = instance
+        # 预热不在这里触发: get_actor 被连通性探测复用, 探测必须无副作用
+        # (否则点一次「检测连通性」就会在后台掀起一次全站抓取). 见 get_actor_crawlers.
         return instance
 
     async def get_actor_crawlers(self, names: Iterable[str]) -> dict[str, ActorFetcher]:
@@ -188,4 +204,17 @@ class CrawlerFactory:
             crawler = await self.get_actor(name)
             if crawler is not None:
                 result[name] = crawler
+                self._warm(crawler)
         return result
+
+    def _warm(self, crawler: ActorCrawler) -> None:
+        """刮削前预热: 索引类来源 (如 minnano) 后台建/刷新索引, 不阻塞本次刮削.
+
+        已有索引时立即兜底, 重建在后台进行, 因此这里只改变「何时开始准备」, 不改变响应时延.
+        任务引用必须留存, 否则可能被 GC 提前回收; 异常在 _warm_actor 内消化.
+        """
+        name = str(crawler.name)
+        running = self._actor_warm_tasks.get(name)
+        if running is not None and not running.done():
+            return
+        self._actor_warm_tasks[name] = asyncio.create_task(_warm_actor(name, crawler), name=f"actor-warmup-{name}")
