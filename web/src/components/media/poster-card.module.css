@@ -1,0 +1,111 @@
+/* 海报卡片: 海报铺满整卡, 番号/标题叠在图底部; 悬停浮现操作图标与复选框.
+ * 底部渐变遮罩常驻, 其上文字用固定亮色, 不随主题切换. */
+
+.card {
+  position: relative;
+  overflow: hidden;
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.card:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* 悬停轻微放大海报画面. */
+.zoom {
+  height: 100%;
+  transition: transform 0.25s ease;
+}
+
+.card:hover .zoom {
+  transform: scale(1.05);
+}
+
+/* 底部渐变遮罩: 番号/标题的底衬, 常驻显示. */
+.gradient {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 62%;
+  background: linear-gradient(
+    to bottom,
+    rgba(0, 0, 0, 0) 0%,
+    rgba(0, 0, 0, 0.45) 45%,
+    rgba(0, 0, 0, 0.9) 100%
+  );
+  pointer-events: none;
+}
+
+/* 左上角复选框: 悬停或已选中时可见. */
+.checkbox {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 3;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: var(--mantine-radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
+}
+
+.card:hover .checkbox,
+.checkboxOn {
+  opacity: 1;
+}
+
+.checkboxOn {
+  background: var(--mantine-color-blue-6);
+  border-color: var(--mantine-color-blue-6);
+}
+
+/* 底部信息块: 番号/标题/元信息. */
+.info {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 8px 10px 10px;
+}
+
+/* 操作图标组: 悬浮于信息块上沿, 悬停浮现. */
+.actions {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  right: 0;
+  margin-bottom: 4px;
+  justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+
+.card:hover .actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* 元信息行: 年份/相位徽标/出演年龄, 超宽裁剪. */
+.metaRow {
+  flex-wrap: nowrap;
+  overflow: hidden;
+}

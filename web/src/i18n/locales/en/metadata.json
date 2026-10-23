@@ -206,9 +206,22 @@
     "columnsPerRow": "Per row",
     "columnsHint": "Posters per row ({{min}}–{{max}})"
   },
+  "card": {
+    "select": "Select",
+    "play": "Play",
+    "detail": "View details"
+  },
+  "blacklist": {
+    "add": "Blacklist",
+    "remove": "Remove from blacklist",
+    "batchDone_one": "Added {{count}} title to blacklist",
+    "batchDone_other": "Added {{count}} titles to blacklist"
+  },
   "favorite": {
     "add": "Favorite",
     "remove": "Unfavorite",
+    "batchDone_one": "Favorited {{count}} title",
+    "batchDone_other": "Favorited {{count}} titles",
     "filterLabel": "Favorite",
     "filterAny": "Any",
     "filterYes": "Favorited",

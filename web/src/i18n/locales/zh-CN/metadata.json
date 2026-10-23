@@ -202,9 +202,20 @@
     "columnsPerRow": "每行数量",
     "columnsHint": "每行显示的海报数量 ({{min}}–{{max}})"
   },
+  "card": {
+    "select": "选择",
+    "play": "播放",
+    "detail": "查看详情"
+  },
+  "blacklist": {
+    "add": "加入黑名单",
+    "remove": "移出黑名单",
+    "batchDone": "已将 {{count}} 部影片加入黑名单"
+  },
   "favorite": {
     "add": "收藏",
     "remove": "取消收藏",
+    "batchDone": "已收藏 {{count}} 部影片",
     "batchUpdated": "已更新 {{count}} 个分类的收藏",
     "missing": "该分类已不存在",
     "filterLabel": "收藏",

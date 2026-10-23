@@ -29,7 +29,7 @@
 
 路由由 `@tanstack/router-vite-plugin` 从 `routes/` 生成 (`routeTree.gen.ts` 不手改): 文件名的点号即路径层级, 需要独立 URL 又共享布局的一层写成 `xxx.tsx` + `xxx.index.tsx`, 叶页与父级同段时用尾随 `_`. `tanstackRouter()` 必须排在 JSX 转换插件之前, 顺序颠倒时构建失败.
 
-片库 / 演员 / 分类无独立「管理」路由, list 视图才有多选与破坏性操作; 多选批量一律走批量端点 (一次请求一次落库, 不逐条发请求), 单行按钮复用同一入口. Feed 相反, 阅读器与源表不共用布局. 查询预设是管理页例外: `/saved-queries` 只列已保留的预设, 全选与批量操作作用于过滤后的可见集合; 会话页的预设面板反过来只列当前会话的临时预设. 侧栏「全部 / 未分组」不经深链进入. `/feeds` 的选中态必须 `activeOptions.exact` 且忽略 search, 否则打开 `/feeds/sources` 时「订阅」也会亮.
+片库 / 演员 / 分类无独立「管理」路由; 多选批量一律走批量端点 (一次请求一次落库, 不逐条发请求), 单行按钮复用同一入口. 海报网格与 list 视图都有多选, 共用 `useIdSelection`; 网格的批量动作收在 `PosterGrid` 顶部的 `SelectionBar`, 与表格视图同一套语义. Feed 相反, 阅读器与源表不共用布局. 查询预设是管理页例外: `/saved-queries` 只列已保留的预设, 全选与批量操作作用于过滤后的可见集合; 会话页的预设面板反过来只列当前会话的临时预设. 侧栏「全部 / 未分组」不经深链进入. `/feeds` 的选中态必须 `activeOptions.exact` 且忽略 search, 否则打开 `/feeds/sources` 时「订阅」也会亮.
 
 **客户端偏好**: ui store (`stores/ui.ts`) 经 zustand persist 写入浏览器 `localStorage` 的 `amane-web`, 没有后端副本, 也没有保存按钮. 字段变化立即写入, 页面加载时读取并经 `merge` 校验 (越界与类型不符的值退回默认). 存储按 origin 隔离: 更换端口、在 `localhost` 与 `127.0.0.1` 之间切换、清除站点数据之后, 偏好均从默认值重新开始. 需要显式确认的只有侧栏列表默认 (见下段).
 
@@ -41,7 +41,7 @@
 
 **评论**: 排序与编辑态只在组件内, 不写地址栏. 影片详情与演员详情的用户标签与刮削标签分栏; 加减菜单一次提交多名, 但固定为两次请求 — 待新建的名称先经 `POST /api/facets/user_tag` 换成 id, 再与已选 id 一起交给所在页的挂载端点 (影片 `/api/metadata/batch/user-tags`, 演员 `/api/actors/batch/user-tags`), 端点语义见 [api.md](api.md). 演员浏览经由 `/api/actors`, 身份治理仍调用 `/api/facets/actor`, 筛选字段的单一事实源是 `lib/actors/browse.ts`; 演员详情出演作品的排序项与片库同源 (`lib/media/browse.ts` 的 `METADATA_SORT_OPTIONS`), 记忆落在 ui store 的 `actorWorksSort`.
 
-**影片收藏与媒体库筛选**: 影片没有收藏列, 收藏复用用户标签 — 标签「★收藏」的成员即已收藏的影片, 因此收藏页就是 `/meta?user_tag_id=<该标签 id>`, 没有独立路由. 侧栏收藏入口与片库同路径, 高亮只能归一处: 判据是解析后的 `search.user_tag_id` 是否含该标签 id (数组参数被序列化成 JSON `[1]`, 不要解析地址串). 这两个入口用裸 `a` 而非 `Link` — `Link` 会给同路径的两个链接都加 `aria-current="page"`, 而 Mantine NavLink 把 `aria-current='page'` 与 `data-active` 并列当作激活态. 标签名是数据 (`user_tags.name`), 不随界面语言变化. 列表项不带标签, 卡片上的收藏态靠一次「该标签的成员 id 集合」查询 (`lib/media/favorites.ts`), 详情页直接读详情响应的 `user_tags`; 收藏动作后失效 `listMetadata` / `listFacets` / `getMetadata` 三族. 媒体库筛选是片库高级筛选面板的库多选, 参数 `library_id` 与 facet 筛选同在 `lib/media/browse.ts` 的 schema 上, 因此可被侧栏默认参数记忆, 判定口径见 [api.md](api.md).
+**影片收藏与媒体库筛选**: 影片没有收藏列, 收藏复用用户标签 — 标签「★收藏」的成员即已收藏的影片, 因此收藏页就是 `/meta?user_tag_id=<该标签 id>`, 没有独立路由. 侧栏收藏入口与片库同路径, 高亮只能归一处: 判据是解析后的 `search.user_tag_id` 是否含该标签 id (数组参数被序列化成 JSON `[1]`, 不要解析地址串). 这两个入口用裸 `a` 而非 `Link` — `Link` 会给同路径的两个链接都加 `aria-current="page"`, 而 Mantine NavLink 把 `aria-current='page'` 与 `data-active` 并列当作激活态. 标签名是数据 (`user_tags.name`), 不随界面语言变化. 列表项不带标签, 卡片上的收藏态靠一次「该标签的成员 id 集合」查询 (`lib/media/favorites.ts`), 详情页直接读详情响应的 `user_tags`; 收藏动作后失效 `listMetadata` / `listFacets` / `getMetadata` 三族. 媒体库筛选是片库高级筛选面板的库多选, 参数 `library_id` 与 facet 筛选同在 `lib/media/browse.ts` 的 schema 上, 因此可被侧栏默认参数记忆, 判定口径见 [api.md](api.md). 影片黑名单与收藏同构 (`lib/media/blacklist.ts`, 标签「⛔黑名单」), 机制、集合查询与失效策略完全一致.
 
 **播放**: 面板先取来源列表 (不调用插件因此立刻渲染), 流列表按需加载; 两级选择经 `EnumToggle` 平铺, 失败信息条给出重试入口. 来源顺序由用户在插件页 `PlaybackOrderSection` 维护, 面板按它重排, **位置 0 即默认探测的来源**. 详情页的预告片与点播经 `playback-player-lazy.ts` 共用同一份播放器声明, 播放画面只由该播放器渲染; 主机侧契约见 [plugins.md](plugins.md), 手势、全屏与浮层的约定见 `components/media/playback-panel.tsx` 与 `playback-player.tsx` 的文件注释.
 
@@ -58,6 +58,8 @@
 **列数**: 海报墙与头像墙的列数取 `lib/media/grid-columns.ts` 的断点表与 ui store 的 `gridColumns` 中的较小者 — 用户偏好是 3–7 的上限, 窄屏仍收在断点以内. 入口是 `GridColumnsSlider`, 各处网格共用同一份偏好, 断点表只有上面那一个副本. 滑块每次档位变化即写入持久化存储 (档位共 5 个, 写入次数有界), 不采用列宽拖到松手才保存的做法.
 
 **就地查看**: 点击海报不导航, 由 `PosterGrid` 内的 `MetadataViewer` 原地打开居中弹窗; 两侧箭头与左右方向键翻阅宿主已加载的那段序列, 抵达两端即停住 (不环绕), 接近末尾时经 `onFetchMore` 追加下一页. 详情主体两处同源 (`components/media/metadata-detail.tsx`), 详情路由只负责写地址栏的评论跳转秒数, 因此 `embedded` / `onDeleted` / `onSeekCommit` 三个 props 决定了差别 — 不得为弹窗另写一份渲染.
+
+**海报卡片**: `poster-card.tsx` 海报铺满整卡, 番号/标题/年份经底部渐变遮罩叠在图上 (样式见 `poster-card.module.css`); 悬停浮现播放 / 详情 / 收藏 / 黑名单四个动作与左上角复选框, 覆盖层交互一律阻断链接导航. 播放弹窗由 `PosterGrid` 统一渲染 `PlaybackPanel`, 卡片只上报 id.
 
 ## 窄屏
 
