@@ -1,0 +1,35 @@
+name: 功能请求
+description: 请求新功能或改进
+title: "[Feature] "
+labels: ["kind:enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        标题使用陈述句或祈使句, 不要使用问句 (例如「能否…」「是否…」「…吗」).
+        示例: 增加按标签筛选列表.
+        提交前请搜索现有 issues.
+        使用 AI 时须遵守 [AI 使用政策](AI_POLICY.md), 并在正文披露使用程度.
+  - type: textarea
+    id: scenario
+    attributes:
+      label: 使用场景
+      description: |
+        当前怎么操作、卡在哪一步、为什么现有能力不够.
+        已经试过的做法也写在这里.
+    validations:
+      required: true
+  - type: textarea
+    id: feature
+    attributes:
+      label: 功能描述
+      description: 期望的结果, 以及验收时如何判断已经做到.
+    validations:
+      required: true
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他
+      description: 截图、链接等补充.
+    validations:
+      required: false

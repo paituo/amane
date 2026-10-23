@@ -1,0 +1,62 @@
+# 兼容 prek (执行方) 与 pre-commit; 实际门禁入口见 scripts/githooks/ 下的同名 shim.
+#
+# 分流原则: 按耗时, 不按覆盖面.
+# - 提交阶段只放生成物、快速修复与快速类型检查;
+# - 推送阶段放完整类型检查与测试;
+# - 全量覆盖率只留给 CI.
+#
+# 文件过滤: 只在与钩子相关的文件变化时运行, 文档 / YAML / Dockerfile 不触发.
+# 生成物先跑: 后端源码变化会重写前端 client, 前端检查必须一起进来, 否则本地绿、CI 红.
+# fail_fast: 修复型钩子改了文件就停, 后续检查此刻必败.
+
+fail_fast: true
+repos:
+  - repo: local
+    hooks:
+      - id: generate
+        name: just generate
+        entry: just generate
+        language: system
+        pass_filenames: false
+        files: '^src/.*\.py$'
+        stages: [pre-commit]
+
+      - id: fix
+        name: format + auto-fix
+        entry: just fix
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi|ts|tsx|js|jsx)$|^pyproject\.toml$|^docs/.*\.md$'
+        stages: [pre-commit]
+
+      - id: lint
+        name: lint
+        entry: just lint
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi|ts|tsx|js|jsx)$|^pyproject\.toml$|^docs/.*\.md$'
+        stages: [pre-commit]
+
+      - id: typecheck
+        name: fast typecheck
+        entry: just typecheck
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+        stages: [pre-commit]
+
+      - id: typecheck-full
+        name: full typecheck
+        entry: just typecheck-full
+        language: system
+        pass_filenames: false
+        files: '\.(py|pyi)$|^pyproject\.toml$'
+        stages: [pre-push]
+
+      - id: test
+        name: test
+        entry: just test
+        language: system
+        pass_filenames: false
+        files: '^(src|tests)/.*\.py$'
+        stages: [pre-push]

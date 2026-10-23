@@ -1,0 +1,104 @@
+name: CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+  pull_request:
+    branches: [main, develop]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - ".gitignore"
+
+env:
+  NODE_VERSION: "24"
+  PNPM_VERSION: "11"
+
+jobs:
+  # 唯一的完整门禁: 调 just ci, 不在这里重写 lint / test 步骤.
+  check:
+    name: just ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup UV
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Setup just
+        uses: extractions/setup-just@v4
+
+      - name: just ci
+        run: just ci
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  # 只在 OS 语义确实不同 (路径分隔符、盘符、信号) 时保留独立 job.
+  # 前端、lint、类型检查与 OS 无关, 已在 Ubuntu 覆盖, 不在这里重复.
+  windows:
+    name: windows tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Setup UV
+        uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+
+      - name: Setup just
+        uses: extractions/setup-just@v4
+
+      - name: just ci-windows
+        run: just ci-windows
+
+# 需要按改动路径决定是否启动重 job 时, 不要用工作流级 `paths`:
+# 被设为必需检查的 job 会永远停在 pending. 改用轻量 changes job 输出布尔值,
+# 再由 needs + if 控制重 job. 示例:
+#
+#   changes:
+#     outputs:
+#       target: ${{ steps.filter.outputs.target }}
+#     steps:
+#       - uses: actions/checkout@v7
+#         with:
+#           fetch-depth: 0        # 三点 diff 需要与 base 的共同祖先
+#       - id: filter
+#         env:
+#           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+#         run: |
+#           if git diff --quiet "$BASE_SHA...$GITHUB_SHA" -- target/; then
+#             echo "target=false" >> "$GITHUB_OUTPUT"
+#           else
+#             echo "target=true" >> "$GITHUB_OUTPUT"
+#           fi
+#
+#   heavy:
+#     needs: changes
+#     if: needs.changes.outputs.target == 'true'

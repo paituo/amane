@@ -1,0 +1,111 @@
+# 单一任务入口. 落地后把下面变量改成项目实际值.
+#
+# 规则:
+# - recipe 行必须同时兼容 sh 与 pwsh (如需要 Windows 开发), 禁止在 recipe 中内嵌 bash 脚本.
+#   若无 Windows 需求, 删除 [windows] 两行.
+# - CI 只调用 just 子命令, 不复制步骤.
+# - lint 的目录范围必须等于 formatter 实际扫描范围, 否则会出现 lint 绿而全仓格式化产生漂移.
+
+[windows]
+set shell := ["pwsh", "-NoProfile", "-Command"]
+
+default:
+    @just --list
+
+# ---- 项目变量 ----------------------------------------------------------------
+SRC := "src/app"
+TESTS := "tests"
+SCRIPTS := "scripts"
+DOCS := "docs/dev"
+
+SYNC := "uv sync --all-extras --all-groups"
+CI_SYNC := "uv sync --frozen --all-extras --dev"
+DEV := "uv run uvicorn app:create_app --factory --reload"
+GENERATE := "uv run python scripts/export_openapi.py"
+BUILD := "pnpm build"
+LINT := "uv run ruff check"
+FORMAT_CHECK := "uv run ruff format --check"
+FORMAT_FIX := "uv run ruff format"
+TYPECHECK := "uv run ty check"
+TYPECHECK_SLOW := "uv run pyright"
+TEST := "uv run pytest tests/ -q -n auto --dist worksteal"
+TEST_COV := "uv run pytest tests/ -n auto --dist worksteal --cov=app --cov-report=term-missing --cov-report=xml"
+GENERATED_PATHS := "openapi.json web/src/client"
+
+CHECK_DIRS := SRC + " " + TESTS + " " + SCRIPTS + " " + DOCS
+# -----------------------------------------------------------------------------
+
+# 同步依赖 + 拉取测试数据 + 启用 Git hooks
+setup: sync hooks
+    @echo "setup 完成"
+
+sync:
+    {{SYNC}}
+
+# 把 core.hooksPath 指向仓库内 shim, 使所有 worktree 共用同一套钩子.
+# --replace-all 收敛多值残留: 普通 set 在该键已有多个取值时会报错退出.
+hooks:
+    git config --replace-all core.hooksPath scripts/githooks
+
+# CI 使用锁定依赖
+ci-sync:
+    {{CI_SYNC}}
+
+lint:
+    {{LINT}} {{CHECK_DIRS}}
+    {{FORMAT_CHECK}} {{CHECK_DIRS}}
+
+fix:
+    {{LINT}} --fix {{CHECK_DIRS}}
+    {{FORMAT_FIX}} {{CHECK_DIRS}}
+
+# 提交阶段: 快速类型检查
+typecheck:
+    {{TYPECHECK}}
+
+# 推送阶段: 完整类型检查 (较慢)
+typecheck-full:
+    {{TYPECHECK_SLOW}}
+
+test:
+    {{TEST}}
+
+test-cov:
+    {{TEST_COV}}
+
+check: lint typecheck test-cov
+
+# 生成物漂移检查: 先重新生成, 再要求工作区无差异.
+# 生成物不手工维护, 也不允许与源定义不一致.
+_check-generated: generate
+    git diff --exit-code --stat {{GENERATED_PATHS}}
+
+# 完整本地门禁, 与 CI 同构
+ci: ci-sync _check-generated check build
+
+# Windows CI: 只跑与 OS 语义相关的测试 (路径分隔符、盘符、信号等).
+# lint / 类型检查 / 前端与 OS 无关, 已在 Ubuntu 覆盖, 不重复.
+ci-windows: ci-sync
+    {{TEST}}
+
+generate:
+    {{GENERATE}}
+
+build:
+    {{BUILD}}
+
+dev: generate
+    {{DEV}}
+
+# 发版: 预检 -> 升版本 -> 生成 -> 白名单提交 -> 打 tag (不 push)
+# precheck 要求: 工作区干净 (仅允许未提交的 CHANGELOG.md), 下一版本与当前不同,
+# tag 不存在, 对应 CHANGELOG 节非空.
+bump kind:
+    python scripts/release.py precheck {{kind}}
+    uv version --bump {{kind}}
+    just generate
+    python scripts/release.py commit
+
+# 只预览版本与 tag, 不写文件
+bump-dry kind:
+    python scripts/release.py precheck {{kind}} --dry-run

@@ -1,0 +1,71 @@
+name: 上报 Bug
+description: 报告可复现的缺陷
+title: "[Bug] "
+labels: ["kind:bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        标题使用陈述句或祈使句, 不要使用问句 (例如「能否…」「是否…」「…吗」).
+        示例: Windows 启动时找不到配置文件.
+        提交前请搜索现有 issues.
+        使用 AI 时须遵守 [AI 使用政策](AI_POLICY.md), 并在正文披露使用程度.
+  - type: input
+    id: os_version
+    attributes:
+      label: 操作系统
+      description: 例如 Windows 11, macOS 15.6, Ubuntu 22.04, Docker
+      placeholder: Windows 11
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: <PROJECT> 版本
+    validations:
+      required: true
+  - type: input
+    id: min_version
+    attributes:
+      label: 出现此问题的最早版本
+      description: 有助于定位引入时间点, 不清楚可以不填.
+    validations:
+      required: false
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象
+      description: 实际发生了什么, 以及你期望发生什么. 日志和配置请填下面的栏.
+      placeholder: "例如: 启动时报配置文件不存在, 期望自动创建默认配置."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现
+      description: 可重现该行为的环境及步骤.
+      placeholder: |
+        1. …
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: 日志
+      description: 整段粘贴即可. 删除 token、cookie 等敏感信息.
+    validations:
+      required: false
+  - type: textarea
+    id: config
+    attributes:
+      label: 配置
+      description: 整段粘贴即可. 删除敏感信息.
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: 其他
+      description: 截图、链接. 不要在这里贴日志或配置.
+    validations:
+      required: false
