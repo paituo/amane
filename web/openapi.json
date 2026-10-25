@@ -1798,13 +1798,55 @@
         }
       }
     },
+    "/api/playback/open-local": {
+      "post": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Open Local Playlist",
+        "description": "把整份播放列表交给外部播放器.\n\n每个条目只贡献主文件: 播放列表的一项对应用户选中的一个条目, 把该条目下的预告、样片一并塞进去会\n让队列比用户看到的更长. `custom` 模式把全部路径写进命令行; `system` 模式只能给关联程序一个路径,\n因此由播放模块写一份临时 ``.m3u`` 承载列表.",
+        "operationId": "open_local_playlist",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlaybackLocalOpenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackLocalOpenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/playback/{metadata_id}/open-local": {
       "post": {
         "tags": [
           "playback"
         ],
         "summary": "Open Local Playback",
-        "description": "用本机外部播放器打开条目的文件.\n\n路径只取自条目索引, 不接受任意地址: 这个动作会在服务所在机器上执行程序, 收窄到\"已入库的文件 +\n已配置的播放器\"之后, 能触发的范围才是有界的.",
+        "description": "用本机外部播放器打开条目的文件 (该条目的全部视频按顺序交给播放器).",
         "operationId": "open_local_playback",
         "parameters": [
           {
@@ -10086,6 +10128,12 @@
               "player": ""
             }
           },
+          "interface": {
+            "$ref": "#/components/schemas/InterfaceConfig",
+            "default": {
+              "restore_list_state": true
+            }
+          },
           "watcher": {
             "$ref": "#/components/schemas/WatcherConfig",
             "default": {
@@ -10145,6 +10193,18 @@
         "type": "object",
         "title": "HotSettings",
         "description": "运行时可更新, 持久化到 TOML. extra=forbid, 未知字段须校验失败."
+      },
+      "InterfaceConfig": {
+        "properties": {
+          "restore_list_state": {
+            "type": "boolean",
+            "title": "Restore List State",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "InterfaceConfig",
+        "description": "界面行为. 只影响浏览器里的列表页, 不涉及数据与任务."
       },
       "Interrupt": {
         "properties": {
@@ -11571,6 +11631,17 @@
               }
             ],
             "title": "Metadata Id"
+          },
+          "poster_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Poster Url"
           },
           "created_at": {
             "anyOf": [
@@ -13019,6 +13090,37 @@
         "type": "object",
         "title": "PlaybackConfig",
         "description": "播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流)."
+      },
+      "PlaybackLocalOpenRequest": {
+        "properties": {
+          "metadata_ids": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "maxItems": 200,
+            "minItems": 1,
+            "title": "Metadata Ids"
+          },
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "metadata_ids"
+        ],
+        "title": "PlaybackLocalOpenRequest",
+        "description": "按播放列表顺序拉起多个条目.\n\n只收条目 id: 路径一律由后端从索引里取, 前端给不了任意地址."
       },
       "PlaybackLocalOpenResponse": {
         "properties": {

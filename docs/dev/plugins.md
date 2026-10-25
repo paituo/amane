@@ -78,7 +78,7 @@ descriptor 声明来源能力、支持的内容类型、语言、访问 URL、`t
 
 ## 本机播放
 
-把播放交给服务所在机器的外部播放器**不是插件的能力**, 而是主机的一条设置 (`[playback]`) 加一个动作端点 (`POST /api/playback/{metadata_id}/open-local`). 它不从任何来源取内容, 与播放源是两回事; 语义、文件挑选与实测结论见 [local-playback.md](local-playback.md).
+把播放交给服务所在机器的外部播放器**不是插件的能力**, 而是主机的一条设置 (`[playback]`) 加动作端点 (`POST /api/playback/{metadata_id}/open-local` 单条, `POST /api/playback/open-local` 多条目即播放列表). 它不从任何来源取内容, 与播放源是两回事; 语义、文件挑选与实测结论见 [local-playback.md](local-playback.md).
 
 ## 网络和运行时
 

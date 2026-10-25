@@ -391,7 +391,7 @@ async def get_metadata(metadata_id: int, repo: RepoDep) -> MetadataDetailRespons
                 ),
             }
         ),
-        files=[to_media_file_response(f, metadata.content_type) for f in files],
+        files=[to_media_file_response(f, metadata.content_type, metadata.poster_url) for f in files],
         user_tags=[to_resp(UserTagResponse, t) for t in user_tags],
         comments=[to_resp(CommentResponse, c) for c in comments],
         actor_ids=actor_ids,

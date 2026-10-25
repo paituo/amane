@@ -23,3 +23,18 @@ def test_launch_rejects_missing_player(tmp_path: Path) -> None:
     target.write_bytes(b"x")
     with pytest.raises(LocalPlayerError, match="播放器不存在"):
         launch_local_player.sync([target], player=str(tmp_path / "vlc.exe"))
+
+
+def test_playlist_file_carries_every_path(tmp_path: Path) -> None:
+    """系统关联只给一个路径, 队列靠临时的 m3u 承载: 必须有头, 且一行一个绝对路径."""
+    from amane.playback.local_player import _write_playlist
+
+    first = tmp_path / "a.mp4"
+    second = tmp_path / "b.mp4"
+    handle = _write_playlist([first, second])
+    try:
+        lines = handle.read_text(encoding="utf-8").splitlines()
+        assert lines == ["#EXTM3U", str(first), str(second)]
+        assert handle.suffix == ".m3u"
+    finally:
+        handle.unlink()

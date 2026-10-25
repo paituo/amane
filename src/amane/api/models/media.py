@@ -24,21 +24,29 @@ class MediaFileResponse(BaseModel):
     has_subtitle: bool = False
     definition: str | None = None
     metadata_id: int | None = None
+    #: 所属条目的首个封面. 列表视图的缩略海报; 未绑定条目或条目未刮到封面为 None.
+    poster_url: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
 
-def to_media_file_response(media: MediaFile, content_type: ContentType | None = None) -> MediaFileResponse:
+def to_media_file_response(
+    media: MediaFile,
+    content_type: ContentType | None = None,
+    poster_url: str | None = None,
+) -> MediaFileResponse:
     """``censored`` / ``uncensored`` 是这一份文件的马赛克性质, 与 ``mosaic`` 及条目类型合成.
 
     ``censored`` 只看性质 (带无码标记的副本不算有码), ``uncensored`` 与列表的 ``uncensored`` 筛选同口径:
     条目类型为无码, 或这一份带无码标记. ``content_type`` 为 None (未绑定条目) 时只看自身标记.
+    ``poster_url`` 同样来自所属条目, 调用方按 ``metadata_id`` 批量补齐.
     """
     response = to_resp(MediaFileResponse, media)
     return response.model_copy(
         update={
             "censored": mosaic_nature(media.mosaic, content_type) is MosaicNature.CENSORED,
             "uncensored": shows_uncensored(media.mosaic, content_type),
+            "poster_url": poster_url,
         }
     )
 

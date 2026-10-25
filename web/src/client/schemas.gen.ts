@@ -3651,6 +3651,12 @@ export const HotSettingsSchema = {
                 player: ''
             }
         },
+        interface: {
+            $ref: '#/components/schemas/InterfaceConfig',
+            default: {
+                restore_list_state: true
+            }
+        },
         watcher: {
             $ref: '#/components/schemas/WatcherConfig',
             default: {
@@ -3710,6 +3716,19 @@ export const HotSettingsSchema = {
     type: 'object',
     title: 'HotSettings',
     description: '运行时可更新, 持久化到 TOML. extra=forbid, 未知字段须校验失败.'
+} as const;
+
+export const InterfaceConfigSchema = {
+    properties: {
+        restore_list_state: {
+            type: 'boolean',
+            title: 'Restore List State',
+            default: true
+        }
+    },
+    type: 'object',
+    title: 'InterfaceConfig',
+    description: '界面行为. 只影响浏览器里的列表页, 不涉及数据与任务.'
 } as const;
 
 export const InterruptSchema = {
@@ -5158,6 +5177,17 @@ export const MediaFileResponseSchema = {
                 }
             ],
             title: 'Metadata Id'
+        },
+        poster_url: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Poster Url'
         },
         created_at: {
             anyOf: [
@@ -6634,6 +6664,38 @@ export const PlaybackConfigSchema = {
     type: 'object',
     title: 'PlaybackConfig',
     description: '播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流).'
+} as const;
+
+export const PlaybackLocalOpenRequestSchema = {
+    properties: {
+        metadata_ids: {
+            items: {
+                type: 'integer'
+            },
+            type: 'array',
+            maxItems: 200,
+            minItems: 1,
+            title: 'Metadata Ids'
+        },
+        file_id: {
+            anyOf: [
+                {
+                    type: 'integer'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'File Id'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: [
+        'metadata_ids'
+    ],
+    title: 'PlaybackLocalOpenRequest',
+    description: '按播放列表顺序拉起多个条目.\n\n只收条目 id: 路径一律由后端从索引里取, 前端给不了任意地址.'
 } as const;
 
 export const PlaybackLocalOpenResponseSchema = {

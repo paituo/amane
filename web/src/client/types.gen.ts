@@ -1830,6 +1830,7 @@ export type HotSettings = {
     search?: SearchConfig;
     r18?: R18Config;
     playback?: PlaybackConfig;
+    interface?: InterfaceConfig;
     watcher?: WatcherConfig;
     everything?: EverythingConfig;
     worker?: WorkerConfig;
@@ -1840,6 +1841,18 @@ export type HotSettings = {
     plugins?: {
         [key: string]: PluginConfig;
     };
+};
+
+/**
+ * InterfaceConfig
+ *
+ * 界面行为. 只影响浏览器里的列表页, 不涉及数据与任务.
+ */
+export type InterfaceConfig = {
+    /**
+     * Restore List State
+     */
+    restore_list_state?: boolean;
 };
 
 /**
@@ -2539,6 +2552,10 @@ export type MediaFileResponse = {
      * Metadata Id
      */
     metadata_id?: number | null;
+    /**
+     * Poster Url
+     */
+    poster_url?: string | null;
     /**
      * Created At
      */
@@ -3336,6 +3353,24 @@ export type PlaybackConfig = {
      * 自定义播放器的可执行文件 (如 vlc.exe). 仅 mode=custom 使用; 空表示不可用.
      */
     player?: string;
+};
+
+/**
+ * PlaybackLocalOpenRequest
+ *
+ * 按播放列表顺序拉起多个条目.
+ *
+ * 只收条目 id: 路径一律由后端从索引里取, 前端给不了任意地址.
+ */
+export type PlaybackLocalOpenRequest = {
+    /**
+     * Metadata Ids
+     */
+    metadata_ids: Array<number>;
+    /**
+     * File Id
+     */
+    file_id?: number | null;
 };
 
 /**
@@ -6409,6 +6444,31 @@ export type GetLocalPlayerResponses = {
 };
 
 export type GetLocalPlayerResponse = GetLocalPlayerResponses[keyof GetLocalPlayerResponses];
+
+export type OpenLocalPlaylistData = {
+    body: PlaybackLocalOpenRequest;
+    path?: never;
+    query?: never;
+    url: '/api/playback/open-local';
+};
+
+export type OpenLocalPlaylistErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OpenLocalPlaylistError = OpenLocalPlaylistErrors[keyof OpenLocalPlaylistErrors];
+
+export type OpenLocalPlaylistResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlaybackLocalOpenResponse;
+};
+
+export type OpenLocalPlaylistResponse = OpenLocalPlaylistResponses[keyof OpenLocalPlaylistResponses];
 
 export type OpenLocalPlaybackData = {
     body?: never;

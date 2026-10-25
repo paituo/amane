@@ -24,6 +24,7 @@
   },
   "columns": {
     "number": "番号",
+    "poster": "海报",
     "path": "路径",
     "status": "状态",
     "size": "大小",
@@ -32,10 +33,11 @@
     "actions": "操作"
   },
   "actions": {
+    "play": "播放",
     "scrape": "刮削",
     "scrapeWithNumber": "指定番号刮削",
-    "batchScrape": "批量刮削",
-    "batchOrganize": "批量整理"
+    "batchScrape": "刮削",
+    "batchOrganize": "整理"
   },
   "scrapeOverride": {
     "title": "指定番号刮削",

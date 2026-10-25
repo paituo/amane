@@ -1,15 +1,5 @@
-import {
-  Alert,
-  Badge,
-  Collapse,
-  Group,
-  SegmentedControl,
-  Stack,
-  Tabs,
-  Text,
-  TextInput,
-} from "@mantine/core";
-import { IconAlertCircle, IconFilter, IconSearch } from "@tabler/icons-react";
+import { Alert, Badge, Collapse, Group, SegmentedControl, Stack, Tabs, Text } from "@mantine/core";
+import { IconAlertCircle, IconFilter } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams } from "@tanstack/react-router";
 import { useMemo, useRef, useState } from "react";
@@ -21,6 +11,7 @@ import { BrowsePageShell } from "@/components/common/browse-page-shell";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { ListPagination } from "@/components/common/list-pagination";
 import { PageSizeSelect } from "@/components/common/page-size-select";
+import { SearchInput } from "@/components/common/search-input";
 import { SortMenu } from "@/components/common/sort-menu";
 import { TriStateSegment } from "@/components/common/tri-state-segment";
 import { CatalogFacetTable } from "@/components/media/catalog-facet-table";
@@ -33,7 +24,9 @@ import {
   SORT_ORDERS,
 } from "@/lib/exhaustive-maps";
 import { FACET_KIND_ICON } from "@/lib/facets";
+import { useListStateMemory, useListStateRestore } from "@/hooks/use-list-state-memory";
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
+import { useResettingState } from "@/hooks/use-resetting-state";
 import { useUIStore } from "@/stores/ui";
 
 const catalogKindSearchSchema = z.object({
@@ -109,8 +102,9 @@ function CatalogKindPage() {
   const cloudLimit = useUIStore((s) => s.pageSizes.catalogKind);
   const listLimit = useUIStore((s) => s.pageSizes.catalogList);
   const narrow = useNarrowViewport("md");
+  const restoreListSearch = useListStateRestore();
 
-  const [searchInput, setSearchInput] = useState(search.q ?? "");
+  const [searchInput, setSearchInput] = useResettingState(() => search.q ?? "", search.q);
   // 带筛选进入时直接展开高级筛选区, 否则筛选项藏在折叠面板里而列表已被过滤.
   const [advancedOpen, setAdvancedOpen] = useState(search.favorite != null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -140,6 +134,9 @@ function CatalogKindPage() {
     enabled: validKind,
   });
 
+  // 离开后再回到这个种类要还原的那份 search; 每个种类各记一份 (切换种类再切回来也走这里).
+  useListStateMemory(`catalog:${kind}`, search, { enabled: validKind });
+
   const maxCount = useMemo(
     () => Math.max(0, ...(data?.items.map((i) => i.count) ?? [0])),
     [data?.items],
@@ -151,6 +148,12 @@ function CatalogKindPage() {
         {t("common:status.error")}
       </Alert>
     );
+  }
+
+  function commitSearch(v: string) {
+    setSearchInput(v);
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    void navigate({ search: (prev) => ({ ...prev, q: v || undefined, page: 1 }) });
   }
 
   function handleSearchChange(v: string) {
@@ -185,7 +188,8 @@ function CatalogKindPage() {
     void navigate({
       to: "/catalog/$kind",
       params: { kind: next },
-      search: (prev) => ({ view: prev.view, page: 1 }),
+      // 切回某个种类时回到上次离开它的样子; 没记过就只保留视图与页码.
+      search: restoreListSearch(`catalog:${next}`, { view: search.view, page: 1 }),
     });
   }
 
@@ -246,12 +250,12 @@ function CatalogKindPage() {
         </Text>
       }
       search={
-        <TextInput
+        <SearchInput
           value={searchInput}
-          onChange={(e) => handleSearchChange(e.currentTarget.value)}
+          onChange={handleSearchChange}
+          onSubmit={commitSearch}
           placeholder={t("browse.searchPlaceholder")}
-          leftSection={<IconSearch size={16} />}
-          w="100%"
+          historyKey={`catalog:${kind}`}
         />
       }
       extras={

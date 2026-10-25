@@ -1,5 +1,5 @@
-import { ActionIcon, Badge, Group, SegmentedControl, Text, TextInput, Title } from "@mantine/core";
-import { IconFilter, IconSearch, IconTable, IconX } from "@tabler/icons-react";
+import { ActionIcon, Badge, Group, SegmentedControl, Text, Title } from "@mantine/core";
+import { IconFilter, IconTable, IconX } from "@tabler/icons-react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import type { ParseKeys } from "i18next";
@@ -16,6 +16,7 @@ import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { InfiniteScrollSentinel } from "@/components/common/infinite-scroll-sentinel";
 import { ListDefaultActions } from "@/components/common/list-default-actions";
 import { PageSizeSelect } from "@/components/common/page-size-select";
+import { SearchInput } from "@/components/common/search-input";
 import { SortMenu } from "@/components/common/sort-menu";
 import { ActorFilterControls } from "@/components/media/actor-filter-controls";
 import { ActorGrid } from "@/components/media/actor-grid";
@@ -38,7 +39,9 @@ import {
   rangeValue,
   replaceActorFilters,
 } from "@/lib/actors/browse";
+import { useListStateMemory } from "@/hooks/use-list-state-memory";
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
+import { useResettingState } from "@/hooks/use-resetting-state";
 import { exhaustiveRecord } from "@/lib/exhaustive";
 import { ACTOR_SORT_FIELDS } from "@/lib/exhaustive-maps";
 import { nextOffsetPageParam } from "@/lib/infinite-list";
@@ -108,12 +111,14 @@ function ActorsIndexPage() {
   const navigate = Route.useNavigate();
   const { t } = useTranslation(["metadata", "common", "savedQueries"]);
   const listLimit = useUIStore((s) => s.pageSizes.actorsList);
+  // 离开后从侧栏「演员」回来要还原的那份 search.
+  useListStateMemory("actors", search);
 
   const filters = actorFilterValuesFromSearch(search);
   const hasActiveFilters = hasActiveActorFilters(filters) || search.saved_query_id != null;
   const hasNonDefaultFilters = hasNonDefaultActorFilters(filters) || search.saved_query_id != null;
 
-  const [searchInput, setSearchInput] = useState(search.q ?? "");
+  const [searchInput, setSearchInput] = useResettingState(() => search.q ?? "", search.q);
   const [advancedOpen, setAdvancedOpen] = useState(hasNonDefaultFilters);
   const narrowViewport = useNarrowViewport("md");
   const debounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -230,12 +235,12 @@ function ActorsIndexPage() {
         </Text>
       }
       search={
-        <TextInput
+        <SearchInput
           value={searchInput}
-          onChange={(e) => handleSearchChange(e.currentTarget.value)}
+          onChange={handleSearchChange}
+          onSubmit={handleSearchChange}
           placeholder={t("actors.searchPlaceholder")}
-          leftSection={<IconSearch size={16} />}
-          w="100%"
+          historyKey="actors"
         />
       }
       extras={

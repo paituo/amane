@@ -5,6 +5,8 @@
     "advancedHint": "Search each type and add filters",
     "facetPlaceholder": "Search…",
     "facetEmpty": "No matches",
+    "clearHistory": "Clear all history",
+    "forgetTerm": "Remove this search term",
     "library": "Library",
     "hasFiles": "Linked files",
     "hasFilesAny": "Any",
@@ -54,11 +56,13 @@
   },
   "actions": {
     "scrape": "Re-scrape",
-    "batchScrape": "Batch Re-scrape",
-    "batchDelete": "Batch Delete",
-    "confirmBatchDeleteTitle": "Delete selected films?",
-    "confirmBatchDeleteDesc_one": "This will permanently delete the selected films",
-    "confirmBatchDeleteDesc_other": "This will permanently delete the selected films"
+    "batchScrape": "Re-scrape",
+    "batchDelete": "Delete",
+    "playSelected": "Play",
+    "addToPlaylist": "Add to playlist",
+    "confirmBatchDeleteTitle": "Delete the selected titles?",
+    "confirmBatchDeleteDesc_one": "The selected title will be deleted permanently. This cannot be undone.",
+    "confirmBatchDeleteDesc_other": "The selected titles will be deleted permanently. This cannot be undone."
   },
   "edit": {
     "title": "Edit film"
@@ -422,5 +426,23 @@
     "unlocked": "Unlocked",
     "toggleLocked": "Unlock field",
     "toggleUnlocked": "Lock field"
+  },
+  "playlist": {
+    "title": "Playlist",
+    "empty": "Nothing added yet",
+    "selectAll": "Select all",
+    "invert": "Invert",
+    "moveUp": "Move up",
+    "moveDown": "Move down",
+    "remove": "Remove",
+    "play": "Play",
+    "added_one": "Added 1 item to the playlist",
+    "added_other": "Added {{count}} items to the playlist",
+    "addedAllDuplicate": "All selected titles are already in the playlist",
+    "prev": "Previous",
+    "next": "Next",
+    "position": "{{index}} / {{total}}",
+    "openedExternal_one": "Handed 1 item to {{player}}",
+    "openedExternal_other": "Handed {{count}} items to {{player}}"
   }
 }

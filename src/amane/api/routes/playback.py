@@ -22,6 +22,7 @@ from ...plugins.api import PATH_SEGMENT_PATTERN, FilePlaybackTarget, PlaybackQue
 from ...utils.threads import path_exists
 from ..deps import ConfigDep, RepoDep, RuntimeDep
 from ..models.playback import (
+    PlaybackLocalOpenRequest,
     PlaybackLocalOpenResponse,
     PlaybackLocalPlayerResponse,
     PlaybackSourceListResponse,
@@ -146,39 +147,25 @@ async def get_local_player(config: ConfigDep) -> Response:
     return JSONResponse(content=body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
-@router.post("/{metadata_id}/open-local", response_model=PlaybackLocalOpenResponse)
-async def open_local_playback(
-    metadata_id: Annotated[int, Path(ge=1)],
-    repo: RepoDep,
-    config: ConfigDep,
-    file_id: Annotated[int | None, Query(ge=1)] = None,
-) -> Response:
-    """用本机外部播放器打开条目的文件.
+async def _launch_paths(config: ConfigDep, present: list[FsPath], *, multiple: bool = False) -> Response:
+    """把已复核过的文件交给外部播放器并回写结果.
 
     路径只取自条目索引, 不接受任意地址: 这个动作会在服务所在机器上执行程序, 收窄到"已入库的文件 +
     已配置的播放器"之后, 能触发的范围才是有界的.
+
+    ``multiple`` 表示调用方确实在送一份队列. 系统关联本身只认一个路径, 队列由播放模块写成临时列表;
+    逐个条目播放 (详情页那个按钮) 不是队列, 仍只开主文件.
     """
     settings = config.hot.playback
     if not settings.external:
         raise HTTPException(status_code=403, detail="外部播放未启用")
     if settings.mode is ExternalPlayerMode.CUSTOM and not settings.player:
         raise HTTPException(status_code=400, detail="未配置自定义播放器路径")
-    if await repo.get_metadata(metadata_id) is None:
-        raise HTTPException(status_code=404, detail="影片不存在")
-
-    files = await repo.get_media_by_metadata_id(metadata_id)
-    if not files:
-        raise HTTPException(status_code=404, detail="该条目还没有索引到任何文件")
-
-    candidates = _pick_local_files(files, file_id=file_id)
-    present = [path for path in (FsPath(item) for item in candidates) if await path_exists(path)]
-    if not present:
-        raise HTTPException(status_code=404, detail=f"文件已不在磁盘上: {candidates[0]}")
     # 只有 `custom` 才把配置里的播放器透传下去: 切回 `system` 后旧路径仍留在配置里, 继续用它会让
     # "系统默认"名不副实; 路径失效时更会直接报错, 而不是回退到关联程序.
     player = settings.player if settings.mode is ExternalPlayerMode.CUSTOM else ""
-    if settings.mode is ExternalPlayerMode.SYSTEM:
-        # 系统关联只认一个路径, 多文件留给 `custom`.
+    if settings.mode is ExternalPlayerMode.SYSTEM and not multiple:
+        # 单条目播放不是队列: 系统关联只认一个路径, 不开临时列表, 取主文件即可.
         present = present[:1]
 
     try:
@@ -191,6 +178,54 @@ async def open_local_playback(
         player=result.player,
     )
     return JSONResponse(content=body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+
+
+async def _present_files(repo: RepoDep, metadata_id: int, *, file_id: int | None) -> list[FsPath]:
+    """取一个条目要交给播放器的文件; 条目不存在或没有视频都是明确错误."""
+    if await repo.get_metadata(metadata_id) is None:
+        raise HTTPException(status_code=404, detail=f"影片不存在: {metadata_id}")
+    files = await repo.get_media_by_metadata_id(metadata_id)
+    if not files:
+        raise HTTPException(status_code=404, detail=f"该条目还没有索引到任何文件: {metadata_id}")
+    candidates = _pick_local_files(files, file_id=file_id)
+    present = [path for path in (FsPath(item) for item in candidates) if await path_exists(path)]
+    if not present:
+        raise HTTPException(status_code=404, detail=f"文件已不在磁盘上: {candidates[0]}")
+    return present
+
+
+@router.post("/open-local", response_model=PlaybackLocalOpenResponse)
+async def open_local_playlist(
+    body: PlaybackLocalOpenRequest,
+    repo: RepoDep,
+    config: ConfigDep,
+) -> Response:
+    """把整份播放列表交给外部播放器.
+
+    每个条目只贡献主文件: 播放列表的一项对应用户选中的一个条目, 把该条目下的预告、样片一并塞进去会
+    让队列比用户看到的更长. `custom` 模式把全部路径写进命令行; `system` 模式只能给关联程序一个路径,
+    因此由播放模块写一份临时 ``.m3u`` 承载列表.
+    """
+    ordered = list(dict.fromkeys(body.metadata_ids))
+    present: list[FsPath] = []
+    for index, metadata_id in enumerate(ordered):
+        # `file_id` 只作用于第一个条目: 它来自详情页的"播这一份", 对后面的条目没有意义.
+        file_id = body.file_id if index == 0 and body.file_id is not None else None
+        files = await _present_files(repo, metadata_id, file_id=file_id)
+        present.extend(files if file_id is not None else files[:1])
+    return await _launch_paths(config, present, multiple=True)
+
+
+@router.post("/{metadata_id}/open-local", response_model=PlaybackLocalOpenResponse)
+async def open_local_playback(
+    metadata_id: Annotated[int, Path(ge=1)],
+    repo: RepoDep,
+    config: ConfigDep,
+    file_id: Annotated[int | None, Query(ge=1)] = None,
+) -> Response:
+    """用本机外部播放器打开条目的文件 (该条目的全部视频按顺序交给播放器)."""
+    present = await _present_files(repo, metadata_id, file_id=file_id)
+    return await _launch_paths(config, present)
 
 
 @router.get("/{source_id}/{metadata_id}/streams", response_model=PlaybackStreamListResponse)

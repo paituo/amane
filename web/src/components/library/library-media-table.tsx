@@ -3,6 +3,7 @@ import {
   Badge,
   Box,
   Button,
+  Center,
   Checkbox,
   Group,
   Menu,
@@ -12,12 +13,24 @@ import {
   type MantineBreakpoint,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconDots, IconFolderDown, IconForms, IconRefresh, IconTrash } from "@tabler/icons-react";
+import {
+  IconDots,
+  IconFolderDown,
+  IconForms,
+  IconPhoto,
+  IconPlaylistAdd,
+  IconPlayerPlay,
+  IconPlayerPlayFilled,
+  IconRefresh,
+  IconSelectAll,
+  IconSquareOff,
+  IconTrash,
+} from "@tabler/icons-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listMediaQueryKey } from "@/client/@tanstack/react-query.gen";
+import { listMediaQueryKey, openLocalPlaylistMutation } from "@/client/@tanstack/react-query.gen";
 import { batchDeleteMedia, batchSubmitTasks, deleteMedia, submitTask } from "@/client/sdk.gen";
 import type {
   ContentType,
@@ -29,15 +42,22 @@ import type {
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { FilePhaseBadges } from "@/components/media/file-phase-badges";
 import { ListToolbar } from "@/components/common/list-toolbar";
+import { PlaybackModal } from "@/components/media/playback-modal";
+import { PlaybackQueueModal } from "@/components/media/playback-queue-modal";
+import { ProxyImage } from "@/components/media/proxy-image";
 import { SortableTh } from "@/components/common/sortable-th";
 import { SelectionBar } from "@/components/common/selection-bar";
 import { ScrapeOverrideDialog } from "./scrape-override-dialog";
 import { MediaDeleteDialog } from "./media-delete-dialog";
+import { useAppMutation } from "@/hooks/use-app-mutation";
 import { useIdSelection } from "@/hooks/use-id-selection";
 import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
 import { assertNever } from "@/lib/exhaustive";
-import { formatFileSize } from "@/lib/utils";
+import { useLocalPlayer, useOpenLocalPlayback } from "@/lib/media/local-player";
+import { entryFromMediaFile } from "@/lib/media/playlist-entries";
+import { type PlaylistEntry, usePlaylistStore } from "@/stores/playlist";
+import { formatFileSize, proxyImageUrl } from "@/lib/utils";
 import { useUIStore } from "@/stores/ui";
 import classes from "./library-media-table.module.css";
 
@@ -62,6 +82,79 @@ function relativePath(libraryPath: string, path: string): string {
     return path.slice(libraryPath.length).replace(/^\//, "");
   }
   return path;
+}
+
+/** 行内缩略海报: 与海报墙同 0.7 比例, 高度由宽度算得 (44 / 0.7 ≈ 63). */
+const POSTER_WIDTH = 44;
+const POSTER_HEIGHT = 63;
+
+interface RowPosterProps {
+  item: MediaFileResponse;
+  onPlay: (item: MediaFileResponse) => void;
+}
+
+/**
+ * 列表行的封面预览与播放入口.
+ *
+ * 封面来自所属条目的首个 `poster_url`; 未绑定条目时只有占位块, 也没有播放按钮 —
+ * 播放端点按条目取流, 没有条目就没有可播的对象.
+ */
+function RowPoster({ item, onPlay }: RowPosterProps) {
+  const { t } = useTranslation("library");
+  const [errored, setErrored] = useState(false);
+  const src = proxyImageUrl(item.poster_url);
+  const metadataId = item.metadata_id;
+  const frameStyle = {
+    overflow: "hidden",
+    borderRadius: "var(--mantine-radius-sm)",
+    background: "var(--mantine-color-default-hover)",
+  } as const;
+
+  return (
+    <Box pos="relative" w={POSTER_WIDTH} h={POSTER_HEIGHT}>
+      {metadataId != null ? (
+        <Link
+          to="/meta/$metadataId"
+          params={{ metadataId: String(metadataId) }}
+          style={{ display: "block", height: "100%" }}
+        >
+          <Box w="100%" h="100%" style={frameStyle}>
+            {src && !errored ? (
+              <ProxyImage
+                src={src}
+                alt={item.number ?? ""}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
+                onError={() => setErrored(true)}
+              />
+            ) : (
+              <Center h="100%">
+                <IconPhoto size={16} color="var(--mantine-color-dimmed)" />
+              </Center>
+            )}
+          </Box>
+        </Link>
+      ) : (
+        <Center h="100%" style={frameStyle}>
+          <IconPhoto size={16} color="var(--mantine-color-dimmed)" />
+        </Center>
+      )}
+      {metadataId != null && (
+        <HintedActionIcon
+          size={20}
+          radius="xl"
+          variant="transparent"
+          color="white"
+          style={{ position: "absolute", right: 2, bottom: 2, background: "rgba(0, 0, 0, 0.55)" }}
+          label={t("actions.play")}
+          onClick={() => onPlay(item)}
+        >
+          <IconPlayerPlayFilled size={11} />
+        </HintedActionIcon>
+      )}
+    </Box>
+  );
 }
 
 interface DeleteMenuItemsProps {
@@ -158,10 +251,11 @@ export function LibraryMediaTable({
   onSort,
   trailing,
 }: LibraryMediaTableProps) {
-  const { t } = useTranslation(["library", "common"]);
+  const { t } = useTranslation(["library", "common", "metadata"]);
   const queryClient = useQueryClient();
   const limit = useUIStore((s) => s.pageSizes.libraryMedia);
-  const { selected, selectedIds, toggleOne, toggleAll, isAllSelected, clear } = useIdSelection();
+  const { selected, selectedIds, toggleOne, toggleAll, isAllSelected, selectAll, invert, clear } =
+    useIdSelection();
   const [batchScraping, setBatchScraping] = useState(false);
   const [batchOrganizing, setBatchOrganizing] = useState(false);
   const [batchDeleting, setBatchDeleting] = useState(false);
@@ -170,6 +264,41 @@ export function LibraryMediaTable({
   );
   const [overrideTarget, setOverrideTarget] = useState<MediaFileResponse | null>(null);
   const [overrideSaving, setOverrideSaving] = useState(false);
+  const [playId, setPlayId] = useState<number | null>(null);
+  // 内嵌播放器的队列: 外部播放器未启用时, "播放"落到这里.
+  const [queue, setQueue] = useState<readonly PlaylistEntry[]>([]);
+
+  // 播放与海报墙同语义: 启用外部播放器就直接交给本机播放器, 否则打开内嵌播放弹窗.
+  const localPlayer = useLocalPlayer();
+  const openLocal = useOpenLocalPlayback();
+  const appendToPlaylist = usePlaylistStore((state) => state.append);
+  const openPlaylist = useAppMutation({
+    mutationOptions: openLocalPlaylistMutation(),
+    successToast: (result) =>
+      t("metadata:playlist.openedExternal", {
+        count: result.paths.length,
+        player: result.player ?? t("metadata:detail.openLocalSystem"),
+      }),
+  });
+
+  function handlePlay(item: MediaFileResponse) {
+    const metadataId = item.metadata_id;
+    if (metadataId == null) return;
+    if (localPlayer.data?.enabled === true) {
+      openLocal.mutate(
+        { path: { metadata_id: metadataId } },
+        {
+          onError: (err) =>
+            notifications.show({
+              message: extractErrorMessage(err, t("common:toast.operationFailed")),
+              color: "red",
+            }),
+        },
+      );
+    } else {
+      setPlayId(metadataId);
+    }
+  }
 
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: listMediaQueryKey() });
 
@@ -301,10 +430,42 @@ export function LibraryMediaTable({
 
   const totalPages = Math.max(1, Math.ceil(total / limit));
   const pageIds = items.map((i) => i.id);
+
+  /** 可加入队列的行: 未绑定条目的文件没有可播对象. */
+  const queueEntries = items
+    .filter((item) => selected.has(item.id))
+    .map(entryFromMediaFile)
+    .filter((entry): entry is PlaylistEntry => entry != null);
+
+  function handlePlaySelected() {
+    if (queueEntries.length === 0) return;
+    if (localPlayer.data?.enabled === true) {
+      openPlaylist.mutate({
+        body: { metadata_ids: queueEntries.map((entry) => entry.metadataId) },
+      });
+      return;
+    }
+    setQueue(queueEntries);
+  }
+
+  function handleAddToPlaylist() {
+    if (queueEntries.length === 0) return;
+    const before = usePlaylistStore.getState().items.length;
+    appendToPlaylist(queueEntries);
+    const added = usePlaylistStore.getState().items.length - before;
+    notifications.show({
+      message:
+        added === 0
+          ? t("metadata:playlist.addedAllDuplicate")
+          : t("metadata:playlist.added", { count: added }),
+      color: added === 0 ? "gray" : "blue",
+    });
+  }
   const allSelected = isAllSelected(pageIds);
   const effectiveSortBy = sortBy ?? "updated_at";
   const effectiveOrder = order ?? "desc";
   const busy = batchScraping || batchOrganizing || batchDeleting;
+  const playItem = playId != null ? items.find((item) => item.metadata_id === playId) : undefined;
 
   function openMediaDelete(ids: number[], includeWorkDir: boolean) {
     setDeleteTargets({ ids, workDir: includeWorkDir });
@@ -322,6 +483,41 @@ export function LibraryMediaTable({
       onChange={handlePageChange}
       header={
         <SelectionBar count={selected.size}>
+          <HintedActionIcon
+            label={t("metadata:playlist.selectAll")}
+            variant="default"
+            size="sm"
+            onClick={() => selectAll(pageIds)}
+          >
+            <IconSelectAll size={16} />
+          </HintedActionIcon>
+          <HintedActionIcon
+            label={t("metadata:playlist.invert")}
+            variant="default"
+            size="sm"
+            onClick={() => invert(pageIds)}
+          >
+            <IconSquareOff size={16} />
+          </HintedActionIcon>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPlayerPlay size={14} />}
+            loading={openPlaylist.isPending}
+            disabled={selected.size === 0}
+            onClick={handlePlaySelected}
+          >
+            {t("metadata:actions.playSelected")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPlaylistAdd size={14} />}
+            disabled={selected.size === 0}
+            onClick={handleAddToPlaylist}
+          >
+            {t("metadata:actions.addToPlaylist")}
+          </Button>
           {/* 窄屏三个批量按钮分成多行, 占用表体高度: sm 以下改由菜单提供, 选中数仍由 Badge 常驻呈现. */}
           <Group gap="xs" wrap="wrap" visibleFrom="sm">
             <Button
@@ -415,6 +611,7 @@ export function LibraryMediaTable({
             <Table.Th w={40}>
               <Checkbox checked={allSelected} onChange={() => toggleAll(pageIds)} />
             </Table.Th>
+            <Table.Th w={POSTER_WIDTH + 20}>{t("columns.poster")}</Table.Th>
             <Table.Th w={120} visibleFrom={METADATA_VISIBLE_FROM}>
               {t("columns.metadata")}
             </Table.Th>
@@ -445,6 +642,9 @@ export function LibraryMediaTable({
               >
                 <Table.Td>
                   <Checkbox checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} />
+                </Table.Td>
+                <Table.Td>
+                  <RowPoster item={item} onPlay={handlePlay} />
                 </Table.Td>
                 <Table.Td style={CELL_OVERFLOW} visibleFrom={METADATA_VISIBLE_FROM}>
                   {item.metadata_id != null ? (
@@ -604,6 +804,16 @@ export function LibraryMediaTable({
           clear();
           invalidate();
         }}
+      />
+      <PlaybackModal
+        metadataId={playId}
+        title={playItem?.number ?? ""}
+        onClose={() => setPlayId(null)}
+      />
+      <PlaybackQueueModal
+        entries={queue}
+        title={queue.length === 1 ? queue[0].number : t("metadata:playlist.title")}
+        onClose={() => setQueue([])}
       />
     </ListToolbar>
   );

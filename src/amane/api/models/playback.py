@@ -65,12 +65,27 @@ class PlaybackLocalPlayerResponse(BaseModel):
     """自定义播放器的文件名; ``None`` 表示交给系统关联程序. 兼作"是否已配置"的判断."""
 
 
+class PlaybackLocalOpenRequest(BaseModel):
+    """按播放列表顺序拉起多个条目.
+
+    只收条目 id: 路径一律由后端从索引里取, 前端给不了任意地址.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    metadata_ids: list[int] = Field(min_length=1, max_length=200)
+    """待播放的条目, 顺序即播放顺序. 重复 id 按首次出现保留."""
+
+    file_id: int | None = None
+    """只播某个条目下的这一份文件; 多条目时只作用于第一个条目."""
+
+
 class PlaybackLocalOpenResponse(BaseModel):
     """拉起结果: 打开了哪些文件, 交给了哪个程序."""
 
     model_config = ConfigDict(extra="forbid")
 
     paths: list[str]
-    """实际交给播放器的文件. 系统关联只能带一个, 此时只有一条."""
+    """实际交给播放器的文件. 顺序与请求的条目顺序一致."""
 
     player: str | None = None

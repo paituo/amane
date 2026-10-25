@@ -13,7 +13,8 @@
     "llm": "LLM 翻译",
     "watermark": "水印",
     "search": "检索",
-    "playback": "播放器"
+    "playback": "播放器",
+    "interface": "界面"
   },
   "config": {
     "loadError": "加载配置失败"
@@ -1053,6 +1054,12 @@
       "player": {
         "label": "自定义播放器路径",
         "description": "播放器可执行文件的完整路径（如 VLC 的 vlc.exe）。只在选择自定义播放器时使用"
+      }
+    },
+    "interface": {
+      "restore_list_state": {
+        "label": "回到列表页时还原上次状态",
+        "description": "开启后，从侧栏再进入列表页会恢复上次的搜索词、筛选、排序与视图；关闭则每次都是干净列表"
       }
     }
   }

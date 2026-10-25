@@ -88,3 +88,26 @@ class TestMediaHttp:
         assert [row["id"] for row in by_type.json()["items"]] == [inherited.id]
         assert by_type.json()["total"] == 1
         assert (await client.get("media?content_type=bogus")).status_code == 422
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_poster_url_from_entry(self, client: AsyncClient, repo: Repository):
+        """文件行的封面取所属条目首个 poster_url; 未绑定条目或条目无封面为 None."""
+        covered = await repo.upsert_metadata(
+            number="MIDV-200", poster_urls=["https://img.test/cover-a.jpg", "https://img.test/cover-b.jpg"]
+        )
+        bare = await repo.upsert_metadata(number="MIDV-201")
+        assert covered.id is not None and bare.id is not None
+        with_cover = await repo.create_media_file(library_id=1, path="/v/MIDV-200.mp4", metadata_id=covered.id)
+        no_cover = await repo.create_media_file(library_id=1, path="/v/MIDV-201.mp4", metadata_id=bare.id)
+        unbound = await repo.create_media_file(library_id=1, path="/v/PLAIN-2.mp4")
+        assert with_cover.id and no_cover.id and unbound.id
+
+        rows = {row["id"]: row for row in (await client.get("media?limit=50")).json()["items"]}
+        # 只取首个: 候选顺序即偏好, 不合并成多值
+        assert rows[with_cover.id]["poster_url"] == "https://img.test/cover-a.jpg"
+        assert rows[no_cover.id]["poster_url"] is None
+        assert rows[unbound.id]["poster_url"] is None
+
+        # 详情响应里的 files 与列表同源
+        detail = await client.get(f"metadata/{covered.id}")
+        assert [f["poster_url"] for f in detail.json()["files"]] == ["https://img.test/cover-a.jpg"]

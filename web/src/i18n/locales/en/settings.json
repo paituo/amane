@@ -13,7 +13,9 @@
     "llm": "LLM Translation",
     "watermark": "Watermark",
     "search": "Search",
-    "playback": "Player"
+    "search": "Search",
+    "playback": "Player",
+    "interface": "Interface"
   },
   "config": {
     "loadError": "Failed to load configuration"
@@ -1053,6 +1055,12 @@
       "player": {
         "label": "Custom player path",
         "description": "Full path of the player executable (e.g. VLC's vlc.exe). Only used when the custom player is selected"
+      }
+    },
+    "interface": {
+      "restore_list_state": {
+        "label": "Restore the last list state on return",
+        "description": "When on, re-entering a list from the sidebar restores the previous query, filters, sort and view; when off every entry starts from a clean list"
       }
     }
   }

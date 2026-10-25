@@ -946,6 +946,17 @@ class ExternalPlayerMode(StrEnum):
     """使用 `playback.player` 指定的可执行文件, 因此可以带命令行参数与多个文件."""
 
 
+class InterfaceConfig(BaseModel):
+    """界面行为. 只影响浏览器里的列表页, 不涉及数据与任务."""
+
+    restore_list_state: bool = True
+    """离开再回到列表页时还原上次的筛选与视图.
+
+    还原的是**导航记忆**: 搜索词、筛选、排序与视图属于 URL, 侧栏入口本来会重置成钉过的默认; 开启后
+    改为回到上次的样子. 关闭则回到"侧栏入口永远是干净列表"的行为.
+    """
+
+
 class PlaybackConfig(BaseModel):
     """播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流)."""
 
@@ -1022,6 +1033,7 @@ class HotSettings(BaseModel):
     search: SearchConfig = SearchConfig()
     r18: R18Config = R18Config()
     playback: PlaybackConfig = PlaybackConfig()
+    interface: InterfaceConfig = InterfaceConfig()
     watcher: WatcherConfig = WatcherConfig()
     everything: EverythingConfig = EverythingConfig()
     worker: WorkerConfig = WorkerConfig()

@@ -1579,3 +1579,49 @@ async def test_open_local_rejects_foreign_file_id(
     response = await client.post(f"playback/{owner}/open-local", params={"file_id": foreign})
     assert response.status_code == 400
     assert launcher.calls == []
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_playlist_keeps_entry_order(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """播放列表: 每个条目只贡献主文件, 顺序照请求, 重复 id 只算一次."""
+    launcher = _broken_hooks(monkeypatch)
+    _set_playback(app, external=True, mode=ExternalPlayerMode.CUSTOM, player=str(safe_path / "vlc.exe"))
+    (safe_path / "vlc.exe").write_bytes(b"MZ")
+    first = await _seed_title(repo, number="PLAY-LIST-A")
+    second = await _seed_title(repo, number="PLAY-LIST-B")
+    await _attach_file(repo, first, safe_path / "a-small.mp4", payload=b"1")
+    await _attach_file(repo, first, safe_path / "a-big.mp4", payload=b"2" * 64)
+    await _attach_file(repo, second, safe_path / "b.mp4", payload=b"3")
+
+    response = await client.post(
+        "playback/open-local",
+        json={"metadata_ids": [second, first, second]},
+    )
+    assert response.status_code == 200, response.text
+    paths, player = launcher.calls[0]
+    assert Path(player).name == "vlc.exe"
+    assert [item.name for item in paths] == ["b.mp4", "a-big.mp4"]
+    assert response.json()["paths"] == [str(item) for item in paths]
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_playlist_needs_the_switch(
+    client: AsyncClient,
+    repo: Repository,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没开外部播放时整批拒绝; 没有任何已知条目时是 404 而不是空成功."""
+    launcher = _broken_hooks(monkeypatch)
+    metadata_id = await _seed_title(repo, number="PLAY-LIST-OFF")
+    await _attach_file(repo, metadata_id, safe_path / "off.mp4", payload=b"X")
+
+    assert (await client.post("playback/open-local", json={"metadata_ids": [metadata_id]})).status_code == 403
+    assert launcher.calls == []
+    assert (await client.post("playback/open-local", json={"metadata_ids": []})).status_code == 422

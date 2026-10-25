@@ -5,6 +5,8 @@
     "advancedHint": "在对应类型中搜索并添加筛选条件",
     "facetPlaceholder": "搜索…",
     "facetEmpty": "无匹配",
+    "clearHistory": "清除全部历史",
+    "forgetTerm": "删除这条搜索记录",
     "library": "媒体库",
     "hasFiles": "关联文件",
     "hasFilesAny": "不限",
@@ -54,8 +56,10 @@
   },
   "actions": {
     "scrape": "重新刮削",
-    "batchScrape": "批量重新刮削",
-    "batchDelete": "批量删除",
+    "batchScrape": "重新刮削",
+    "batchDelete": "删除",
+    "playSelected": "播放",
+    "addToPlaylist": "加入播放列表",
     "confirmBatchDeleteTitle": "删除选中的影片？",
     "confirmBatchDeleteDesc": "将永久删除选中的影片, 此操作不可撤销"
   },
@@ -397,5 +401,21 @@
     "unlocked": "未锁定",
     "toggleLocked": "解锁字段",
     "toggleUnlocked": "锁定字段"
+  },
+  "playlist": {
+    "title": "播放列表",
+    "empty": "还没有加入任何条目",
+    "selectAll": "全选",
+    "invert": "反选",
+    "moveUp": "上移",
+    "moveDown": "下移",
+    "remove": "删除",
+    "play": "播放",
+    "added": "已加入播放列表 ({{count}})",
+    "addedAllDuplicate": "选中的条目都已在播放列表里",
+    "prev": "上一项",
+    "next": "下一项",
+    "position": "第 {{index}} / {{total}} 项",
+    "openedExternal": "已把 {{count}} 项交给 {{player}}"
   }
 }

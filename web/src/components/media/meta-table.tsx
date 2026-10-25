@@ -17,7 +17,11 @@ import { notifications } from "@mantine/notifications";
 import {
   IconDots,
   IconInfoCircle,
+  IconPlaylistAdd,
+  IconPlayerPlay,
   IconRefresh,
+  IconSelectAll,
+  IconSquareOff,
   IconStar,
   IconTag,
   IconTrash,
@@ -34,20 +38,26 @@ import {
   deleteMetadataMutation,
   listFacetsOptions,
   listMetadataQueryKey,
+  openLocalPlaylistMutation,
   submitTaskMutation,
 } from "@/client/@tanstack/react-query.gen";
 import type { MetadataResponse, MetadataSortField, SortOrder } from "@/client/types.gen";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { ListToolbar } from "@/components/common/list-toolbar";
 import { MetadataViewer } from "@/components/media/metadata-viewer";
+import { PlaybackQueueModal } from "@/components/media/playback-queue-modal";
 import { SortableTh } from "@/components/common/sortable-th";
 import { SelectionBar } from "@/components/common/selection-bar";
+import { useAppMutation } from "@/hooks/use-app-mutation";
 import { useIdSelection } from "@/hooks/use-id-selection";
 import { useResizableColumns } from "@/hooks/use-resizable-columns";
 import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
 import { USER_TAG_FACET_LIST } from "@/lib/facets";
 import { useFavoriteIds, useFavoriteMutation } from "@/lib/media/favorites";
+import { useLocalPlayer } from "@/lib/media/local-player";
+import { entryFromMetadata } from "@/lib/media/playlist-entries";
+import { type PlaylistEntry, usePlaylistStore } from "@/stores/playlist";
 import { type MetaTableColumnKey, useUIStore } from "@/stores/ui";
 import { VrBadge } from "./vr-badge";
 import classes from "./meta-table.module.css";
@@ -156,11 +166,14 @@ export function MetaTable({
     return effectiveWidth(key);
   }
   const pageIds = items.map((i) => i.id);
-  const { selected, selectedIds, toggleOne, toggleAll, isAllSelected, clear } = useIdSelection();
+  const { selected, selectedIds, toggleOne, toggleAll, isAllSelected, selectAll, invert, clear } =
+    useIdSelection();
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [tagIds, setTagIds] = useState<string[]>([]);
   // 就地详情: 与海报墙同一套弹窗, 可翻阅的序列只有当前这一页 (列表是分页, 没有下一页可接).
   const [openId, setOpenId] = useState<number | null>(null);
+  // 内嵌播放器的队列: 外部播放器未启用时, "播放"落到这里.
+  const [queue, setQueue] = useState<readonly PlaylistEntry[]>([]);
 
   const { data: userTags } = useQuery(listFacetsOptions(USER_TAG_FACET_LIST));
   const favoriteIds = useFavoriteIds();
@@ -274,6 +287,43 @@ export function MetaTable({
 
   const busy = batchScrape.isPending || batchDelete.isPending || batchTags.isPending;
 
+  const localPlayer = useLocalPlayer();
+  const appendToPlaylist = usePlaylistStore((state) => state.append);
+  const openPlaylist = useAppMutation({
+    mutationOptions: openLocalPlaylistMutation(),
+    successToast: (result) =>
+      t("playlist.openedExternal", {
+        count: result.paths.length,
+        player: result.player ?? t("detail.openLocalSystem"),
+      }),
+  });
+
+  /** 选中项的快照, 顺序照当前页顺序. */
+  const selectedEntries = items.filter((item) => selected.has(item.id)).map(entryFromMetadata);
+
+  function handlePlaySelected() {
+    if (selectedEntries.length === 0) return;
+    if (localPlayer.data?.enabled === true) {
+      openPlaylist.mutate({
+        body: { metadata_ids: selectedEntries.map((entry) => entry.metadataId) },
+      });
+      return;
+    }
+    setQueue(selectedEntries);
+  }
+
+  function handleAddToPlaylist() {
+    if (selectedEntries.length === 0) return;
+    const before = usePlaylistStore.getState().items.length;
+    appendToPlaylist(selectedEntries);
+    const added = usePlaylistStore.getState().items.length - before;
+    notifications.show({
+      message:
+        added === 0 ? t("playlist.addedAllDuplicate") : t("playlist.added", { count: added }),
+      color: added === 0 ? "gray" : "blue",
+    });
+  }
+
   const tagOptions = useMemo(
     () => (userTags?.items ?? []).map((tag) => ({ value: String(tag.id), label: tag.name })),
     [userTags],
@@ -297,6 +347,41 @@ export function MetaTable({
         onChange={handlePageChange}
         header={
           <SelectionBar count={selected.size}>
+            <HintedActionIcon
+              label={t("playlist.selectAll")}
+              variant="default"
+              size="sm"
+              onClick={() => selectAll(pageIds)}
+            >
+              <IconSelectAll size={16} />
+            </HintedActionIcon>
+            <HintedActionIcon
+              label={t("playlist.invert")}
+              variant="default"
+              size="sm"
+              onClick={() => invert(pageIds)}
+            >
+              <IconSquareOff size={16} />
+            </HintedActionIcon>
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconPlayerPlay size={14} />}
+              loading={openPlaylist.isPending}
+              disabled={selected.size === 0}
+              onClick={handlePlaySelected}
+            >
+              {t("actions.playSelected")}
+            </Button>
+            <Button
+              size="xs"
+              variant="light"
+              leftSection={<IconPlaylistAdd size={14} />}
+              disabled={selected.size === 0}
+              onClick={handleAddToPlaylist}
+            >
+              {t("actions.addToPlaylist")}
+            </Button>
             <Button
               size="xs"
               variant="light"
@@ -599,6 +684,11 @@ export function MetaTable({
           </Group>
         </Stack>
       </Modal>
+      <PlaybackQueueModal
+        entries={queue}
+        title={queue.length === 1 ? queue[0].number : t("playlist.title")}
+        onClose={() => setQueue([])}
+      />
     </>
   );
 }

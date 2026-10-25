@@ -30,6 +30,27 @@ export function useIdSelection() {
     [selected],
   );
 
+  /** 全选: 只做选中, 不清空已有选择 (与 `toggleAll` 的"再点一次取消"不同). */
+  const selectAll = useCallback((pageIds: readonly number[]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of pageIds) next.add(id);
+      return next;
+    });
+  }, []);
+
+  /** 反选: 只翻转传入的那些 id, 页面外的选择保持不变. */
+  const invert = useCallback((pageIds: readonly number[]) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of pageIds) {
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+      }
+      return next;
+    });
+  }, []);
+
   const clear = useCallback(() => setSelected(new Set()), []);
 
   const selectedIds = [...selected];
@@ -40,6 +61,8 @@ export function useIdSelection() {
     toggleOne,
     toggleAll,
     isAllSelected,
+    selectAll,
+    invert,
     clear,
     setSelected,
   };

@@ -17,6 +17,7 @@ import {
   withoutListDefault,
   withListDefault,
 } from "@/lib/nav-defaults";
+import { dropSearchTerm, pushSearchTerm, SEARCH_HISTORY_LIMIT } from "@/lib/search-history";
 import {
   clampPageSize,
   DEFAULT_PAGE_SIZES,
@@ -104,6 +105,28 @@ interface UIState {
   setListDefault: (update: NavListDefaultsUpdate) => void;
   clearListDefault: (key: NavListKey) => void;
   setActorWorksSort: (sort: MetadataSortPreference) => void;
+  /**
+   * 各列表入口的最近搜索词.
+   *
+   * 键是列表入口标识 (片库 / 演员 / 媒体库 ...), 值是最近用过的检索词, 最新的在前. 与列表态无关:
+   * 关掉"还原列表"也不影响搜索历史.
+   */
+  recentSearches: Record<string, string[]>;
+  rememberSearch: (key: string, term: string) => void;
+  forgetSearch: (key: string, term: string) => void;
+  clearSearches: (key: string) => void;
+}
+
+function sanitizeRecentSearches(raw: unknown): Record<string, string[]> {
+  if (typeof raw !== "object" || raw == null) return {};
+  const result: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!Array.isArray(value)) continue;
+    result[key] = value
+      .filter((item): item is string => typeof item === "string")
+      .slice(0, SEARCH_HISTORY_LIMIT);
+  }
+  return result;
 }
 
 export const useUIStore = create<UIState>()(
@@ -121,6 +144,7 @@ export const useUIStore = create<UIState>()(
       playbackSourceOrder: [],
       listDefaults: {},
       actorWorksSort: { ...DEFAULT_METADATA_SORT_PREFERENCE },
+      recentSearches: {},
       toggleNavbar: () => set((s) => ({ navbarCollapsed: !s.navbarCollapsed })),
       setNavbarCollapsed: (collapsed) => set({ navbarCollapsed: collapsed }),
       setTheme: (theme) => set({ theme }),
@@ -140,6 +164,22 @@ export const useUIStore = create<UIState>()(
       clearListDefault: (key) =>
         set((state) => ({ listDefaults: withoutListDefault(state.listDefaults, key) })),
       setActorWorksSort: (sort) => set({ actorWorksSort: sort }),
+      rememberSearch: (key, term) =>
+        set((state) => ({
+          recentSearches: {
+            ...state.recentSearches,
+            [key]: pushSearchTerm(state.recentSearches[key] ?? [], term),
+          },
+        })),
+      forgetSearch: (key, term) =>
+        set((state) => ({
+          recentSearches: {
+            ...state.recentSearches,
+            [key]: dropSearchTerm(state.recentSearches[key] ?? [], term),
+          },
+        })),
+      clearSearches: (key) =>
+        set((state) => ({ recentSearches: { ...state.recentSearches, [key]: [] } })),
     }),
     {
       name: STORAGE_KEY,
@@ -172,6 +212,8 @@ export const useUIStore = create<UIState>()(
           actorWorksSort: metadataSortPreferenceSchema.safeParse(p?.actorWorksSort).data ?? {
             ...DEFAULT_METADATA_SORT_PREFERENCE,
           },
+          // 持久化值可能被手改成任意形状: 只收字符串数组, 每项截到上限.
+          recentSearches: sanitizeRecentSearches(p?.recentSearches),
         };
       },
     },

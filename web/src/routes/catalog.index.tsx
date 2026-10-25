@@ -8,6 +8,7 @@ import type { FacetResponse } from "@/client/types.gen";
 import { FacetFavoriteMark } from "@/components/media/facet-favorite-star";
 import { CATALOG_FACET_KINDS, FAVORITE_FACET_KINDS } from "@/lib/exhaustive-maps";
 import { FACET_KIND_ICON } from "@/lib/facets";
+import { useListStateRestore } from "@/hooks/use-list-state-memory";
 
 export const Route = createFileRoute("/catalog/")({ component: CatalogIndexPage });
 
@@ -138,6 +139,8 @@ function FavoriteSection() {
 function KindSection({ kind }: { kind: CatalogKind }) {
   const { t } = useTranslation("metadata");
   const Icon = FACET_KIND_ICON[kind];
+  // 从这个索引页进某个种类时, 回到上次离开它的样子 (开关见设置里的「界面」).
+  const restoreListSearch = useListStateRestore();
   const { data, isLoading } = useQuery(
     listFacetsOptions({ path: { kind }, query: { limit: PREVIEW, offset: 0 } }),
   );
@@ -150,6 +153,7 @@ function KindSection({ kind }: { kind: CatalogKind }) {
       <Link
         to="/catalog/$kind"
         params={{ kind }}
+        search={restoreListSearch(`catalog:${kind}`, {})}
         style={{ textDecoration: "none", color: "inherit", width: "fit-content" }}
       >
         <Group gap="xs" style={{ cursor: "pointer" }}>

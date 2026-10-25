@@ -1,15 +1,15 @@
-import {
-  AspectRatio,
-  Button,
-  Center,
-  Modal,
-  SimpleGrid,
-  Skeleton,
-  Stack,
-  Text,
-} from "@mantine/core";
+import { AspectRatio, Button, Center, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconBan, IconRefresh, IconStar, IconTrash } from "@tabler/icons-react";
+import {
+  IconBan,
+  IconPlaylistAdd,
+  IconPlayerPlay,
+  IconRefresh,
+  IconSelectAll,
+  IconSquareOff,
+  IconStar,
+  IconTrash,
+} from "@tabler/icons-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -17,12 +17,16 @@ import {
   batchDeleteMetadataMutation,
   batchScrapeMetadataMutation,
   listMetadataQueryKey,
+  openLocalPlaylistMutation,
 } from "@/client/@tanstack/react-query.gen";
 import { batchMetadataUserTags } from "@/client/sdk.gen";
 import type { MetadataResponse } from "@/client/types.gen";
 import { SelectionBar } from "@/components/common/selection-bar";
+import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { MetadataViewer } from "@/components/media/metadata-viewer";
-import { PlaybackPanel } from "@/components/media/playback-panel";
+import { PlaybackModal } from "@/components/media/playback-modal";
+import { PlaybackQueueModal } from "@/components/media/playback-queue-modal";
+import { useAppMutation } from "@/hooks/use-app-mutation";
 import { useIdSelection } from "@/hooks/use-id-selection";
 import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
@@ -30,6 +34,8 @@ import { blacklistTagQueryKey, ensureBlacklistTagId } from "@/lib/media/blacklis
 import { ensureFavoriteTagId, favoriteTagQueryKey } from "@/lib/media/favorites";
 import { useGridColumns } from "@/lib/media/grid-columns";
 import { useLocalPlayer, useOpenLocalPlayback } from "@/lib/media/local-player";
+import { entryFromMetadata } from "@/lib/media/playlist-entries";
+import { type PlaylistEntry, usePlaylistStore } from "@/stores/playlist";
 import { PosterCard } from "./poster-card";
 
 interface PosterGridProps {
@@ -64,15 +70,54 @@ export function PosterGrid({
   const [openId, setOpenId] = useState<number | null>(null);
   // 播放弹窗; 面板按 metadataId 自行加载播放源与码流.
   const [playId, setPlayId] = useState<number | null>(null);
+  // 内嵌播放器的队列 (外部播放器未启用时, "播放选中项"落到这里).
+  const [queue, setQueue] = useState<readonly PlaylistEntry[]>([]);
 
   const open = useCallback((id: number) => setOpenId(id), []);
 
-  const { selected, selectedIds, toggleOne, clear } = useIdSelection();
+  const { selected, selectedIds, toggleOne, selectAll, invert, clear } = useIdSelection();
   const [tagBusy, setTagBusy] = useState(false);
 
   // 海报墙播放按钮: 外部播放器开着就直接拉起本机播放器, 否则弹出内嵌播放器页面直接播放.
   const localPlayer = useLocalPlayer();
   const openLocal = useOpenLocalPlayback();
+  const openPlaylist = useAppMutation({
+    mutationOptions: openLocalPlaylistMutation(),
+    successToast: (result) =>
+      t("playlist.openedExternal", {
+        count: result.paths.length,
+        player: result.player ?? t("detail.openLocalSystem"),
+      }),
+  });
+  const appendToPlaylist = usePlaylistStore((state) => state.append);
+
+  /** 选中项的快照, 供播放与加入队列共用; 顺序照列表顺序. */
+  const selectedEntries = items.filter((item) => selected.has(item.id)).map(entryFromMetadata);
+
+  /** 播放选中项: 外部播放器开着就交整批, 否则打开内嵌队列. */
+  function handlePlaySelected() {
+    if (selectedEntries.length === 0) return;
+    if (localPlayer.data?.enabled === true) {
+      openPlaylist.mutate({
+        body: { metadata_ids: selectedEntries.map((entry) => entry.metadataId) },
+      });
+      return;
+    }
+    setQueue(selectedEntries);
+  }
+
+  function handleAddToPlaylist() {
+    if (selectedEntries.length === 0) return;
+    const before = usePlaylistStore.getState().items.length;
+    appendToPlaylist(selectedEntries);
+    const added = usePlaylistStore.getState().items.length - before;
+    notifications.show({
+      message:
+        added === 0 ? t("playlist.addedAllDuplicate") : t("playlist.added", { count: added }),
+      color: added === 0 ? "gray" : "blue",
+    });
+  }
+
   function handlePlay(item: MetadataResponse) {
     if (localPlayer.data?.enabled === true) {
       openLocal.mutate(
@@ -207,6 +252,41 @@ export function PosterGrid({
   return (
     <>
       <SelectionBar count={selected.size}>
+        <HintedActionIcon
+          label={t("playlist.selectAll")}
+          variant="default"
+          size="sm"
+          onClick={() => selectAll(items.map((item) => item.id))}
+        >
+          <IconSelectAll size={16} />
+        </HintedActionIcon>
+        <HintedActionIcon
+          label={t("playlist.invert")}
+          variant="default"
+          size="sm"
+          onClick={() => invert(items.map((item) => item.id))}
+        >
+          <IconSquareOff size={16} />
+        </HintedActionIcon>
+        <Button
+          size="xs"
+          variant="light"
+          leftSection={<IconPlayerPlay size={14} />}
+          loading={openPlaylist.isPending}
+          disabled={selected.size === 0}
+          onClick={handlePlaySelected}
+        >
+          {t("actions.playSelected")}
+        </Button>
+        <Button
+          size="xs"
+          variant="light"
+          leftSection={<IconPlaylistAdd size={14} />}
+          disabled={selected.size === 0}
+          onClick={handleAddToPlaylist}
+        >
+          {t("actions.addToPlaylist")}
+        </Button>
         <Button
           size="xs"
           variant="light"
@@ -269,23 +349,16 @@ export function PosterGrid({
         onOpenIdChange={setOpenId}
         onFetchMore={onFetchMore}
       />
-      <Modal
-        opened={playId != null}
-        onClose={() => setPlayId(null)}
+      <PlaybackModal
+        metadataId={playId}
         title={playItem?.number ?? ""}
-        size="90rem"
-        centered
-      >
-        {playId != null && (
-          <PlaybackPanel
-            metadataId={playId}
-            playNonce={1}
-            seekRequest={null}
-            onSeekHandled={() => {}}
-            onCanSeekChange={() => {}}
-          />
-        )}
-      </Modal>
+        onClose={() => setPlayId(null)}
+      />
+      <PlaybackQueueModal
+        entries={queue}
+        title={queue.length === 1 ? queue[0].number : t("playlist.title")}
+        onClose={() => setQueue([])}
+      />
     </>
   );
 }

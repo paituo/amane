@@ -11,11 +11,10 @@ import {
   Skeleton,
   Stack,
   Text,
-  TextInput,
   Title,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconArrowLeft, IconFilter, IconSearch, IconX } from "@tabler/icons-react";
+import { IconArrowLeft, IconFilter, IconX } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, Link, stripSearchParams, useNavigate } from "@tanstack/react-router";
 import { useMemo, useRef, useState } from "react";
@@ -31,6 +30,7 @@ import type { MediaFileStatus, MediaSortField } from "@/client/types.gen";
 import { BrowsePageShell } from "@/components/common/browse-page-shell";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { PageSizeSelect } from "@/components/common/page-size-select";
+import { SearchInput } from "@/components/common/search-input";
 import { LibraryActionButtons } from "@/components/library/library-actions";
 import {
   LIBRARY_FORM_MODAL_SIZE,
@@ -239,12 +239,12 @@ function LibraryDetailPage() {
           </Text>
         }
         search={
-          <TextInput
+          <SearchInput
             value={searchInput}
-            onChange={(e) => handleSearchChange(e.currentTarget.value)}
+            onChange={handleSearchChange}
+            onSubmit={handleSearchChange}
             placeholder={t("searchPlaceholder")}
-            leftSection={<IconSearch size={16} />}
-            w="100%"
+            historyKey={`library-${id}`}
           />
         }
         extras={

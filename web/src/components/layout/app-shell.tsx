@@ -5,6 +5,7 @@ import {
   Burger,
   Divider,
   Group,
+  Indicator,
   Loader,
   Menu,
   NavLink,
@@ -31,6 +32,7 @@ import {
   IconMessageChatbot,
   IconMoonStars,
   IconMovie,
+  IconPlaylist,
   IconPuzzle,
   IconRss,
   IconSearch,
@@ -49,12 +51,15 @@ import { type ReactNode, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { APP_SHELL_HEADER_HEIGHT } from "@/components/layout/app-shell-metrics";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
+import { PlaylistDrawer } from "@/components/media/playlist-drawer";
 import { VersionMenu } from "@/components/layout/version-menu";
+import { useListStateRestore } from "@/hooks/use-list-state-memory";
 import { APP_NAME, GITHUB_URL } from "@/lib/app";
 import { ensureFavoriteTagId, useFavoriteTagId } from "@/lib/media/favorites";
 import { navItemClick } from "@/lib/nav-defaults";
 import { shellEnvironment } from "@/lib/shell";
 import { useConnectionStore } from "@/stores/connection";
+import { usePlaylistStore } from "@/stores/playlist";
 import { useUIStore } from "@/stores/ui";
 
 type CommonKey = ParseKeys<"common">;
@@ -139,6 +144,7 @@ function NavItemLink({
   const { pathname, search } = useLocation();
   const navigate = useNavigate();
   const listDefaults = useUIStore((state) => state.listDefaults);
+  const restoreListSearch = useListStateRestore();
   const ensureFavoriteMutation = useMutation({ mutationFn: ensureFavoriteTagId });
   const Icon = item.icon;
 
@@ -187,6 +193,7 @@ function NavItemLink({
 
   // 列表条目携带该页的默认参数: 入口地址不残留搜索词、页码与 agent 深链.
   // 路由的参数类型各不相同, 因此按 `to` 分支给字面量目标. 分类入口是种类索引页, 没有可承载的参数.
+  // 「回到上次状态」开着时, 换成离开时那一份 search (见 `hooks/use-list-state-memory.ts`); 钉默认仍是兜底.
   // 片库与收藏两个入口用裸 `a` 而非 `Link`: 二者同路径, `Link` 会给它们都加 `aria-current="page"`,
   // 而 Mantine NavLink 把 `aria-current='page'` 与 `data-active` 并列当作激活态, 结果是两个一起高亮.
   if (item.to === "/meta") {
@@ -198,7 +205,11 @@ function NavItemLink({
           navItemClick(
             event,
             onNavigate,
-            () => void navigate({ to: "/meta", search: listDefaults.meta ?? {} }),
+            () =>
+              void navigate({
+                to: "/meta",
+                search: restoreListSearch("meta", listDefaults.meta ?? {}),
+              }),
           )
         }
         {...shell}
@@ -214,7 +225,11 @@ function NavItemLink({
           navItemClick(
             event,
             onNavigate,
-            () => void navigate({ to: "/actors", search: listDefaults.actors ?? {} }),
+            () =>
+              void navigate({
+                to: "/actors",
+                search: restoreListSearch("actors", listDefaults.actors ?? {}),
+              }),
           )
         }
         {...shell}
@@ -332,6 +347,29 @@ function ClientSettingsLink({ available }: { available: boolean }) {
   );
 }
 
+function PlaylistButton({ onClick, count }: { onClick: () => void; count: number }) {
+  const { t } = useTranslation("common");
+  return (
+    <Indicator
+      label={count}
+      size={16}
+      color="brand"
+      disabled={count === 0}
+      styles={{ indicator: { pointerEvents: "none" } }}
+    >
+      <HintedActionIcon
+        variant="subtle"
+        color="gray"
+        size="lg"
+        onClick={onClick}
+        label={t("nav.playlist")}
+      >
+        <IconPlaylist size={18} />
+      </HintedActionIcon>
+    </Indicator>
+  );
+}
+
 function ConnectionIndicator() {
   const status = useConnectionStore((s) => s.status);
   const { t } = useTranslation("common");
@@ -445,6 +483,8 @@ export function AppShellLayout(): ReactNode {
   const toggleDesktop = useUIStore((s) => s.toggleNavbar);
   const shell = shellEnvironment();
   const favoriteTagId = useFavoriteTagId().data ?? null;
+  const [playlistOpen, setPlaylistOpen] = useState(false);
+  const playlistCount = usePlaylistStore((state) => state.items.length);
 
   return (
     <AppShell
@@ -476,6 +516,7 @@ export function AppShellLayout(): ReactNode {
           <HeaderBrand />
           <HeaderSearch />
           <Group ml="auto" gap="xs" wrap="nowrap">
+            <PlaylistButton onClick={() => setPlaylistOpen(true)} count={playlistCount} />
             <ConnectionIndicator />
             <ThemeToggle />
             <LanguageMenu />
@@ -534,6 +575,8 @@ export function AppShellLayout(): ReactNode {
       <AppShell.Main>
         <Outlet />
       </AppShell.Main>
+
+      <PlaylistDrawer opened={playlistOpen} onClose={() => setPlaylistOpen(false)} />
     </AppShell>
   );
 }

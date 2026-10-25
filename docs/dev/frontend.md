@@ -35,6 +35,10 @@
 
 **列表默认**: 侧栏「片库 / 演员 / 订阅」按钮携带 `lib/nav-defaults.ts` 白名单内的默认列表参数 (排序、筛选、视图; 存于 ui store), 点击时经路由跳转整体替换 search, 因此 URL 仍是列表态的唯一事实来源 —— 页面内清除的筛选不会被默认重新写入. Mantine 的多态 props 把 `component={Link}` 的 `search` 收窄成 `never`, 参数只能这样送入; 中键与修饰键保留浏览器行为, 打开的地址因此不带默认参数.
 
+**回到上次状态**: 除钉默认之外, 还有一层「导航记忆」(`lib/list-state.ts`, `hooks/use-list-state-memory.ts`): 片库、演员与分类页把当前 search 抄一份到 `sessionStorage` (按入口 keyed; 分类按种类各记一份 `catalog:<kind>`), 从侧栏同一入口或切回同一分类再进来时用它代替钉默认, 于是搜索词、筛选、排序、视图都像刚才一样. 它只在**这一次浏览**内有效 (关标签页即失效), 与长期偏好分工明确. 由服务端配置 `interface.restore_list_state` 控制, 默认开; 关掉即回到「侧栏入口永远是干净列表」. 上一次的 search 若本身干净 (无搜索词与筛选) 则不还原, 免得把上一个库或页码带回来. **收藏与片库同路径**, 收藏是一套固定筛选, 它那份不进记忆 (否则下次点「片库」会把收藏筛选带回来). 滚动位置与已加载页数不在这一层: 它们是视图内部状态, 需要另行设计.
+
+**播放列表**: 队列在 `stores/playlist.ts` (persist 到 `localStorage`), 「加入播放列表」只**追加并去重**, 从不清空已有条目; 每条只贡献**主文件**, 预告与样片不入列. 顶栏「连接状态」左侧的图标带条数角标, 点开是右侧 `components/media/playlist-drawer.tsx`: 每项一个复选框, 工具条给全选、反选、上移、下移、删除与播放. 未勾选时「播放」作用于整份队列. 播放入口按 `playback.external` 分流: 开 → `POST /api/playback/open-local` 把整份队列交给外部播放器; 关 → 塞进内置播放器的列表 (`components/media/playback-queue-modal.tsx`, 带上一项 / 下一项). 队列与「列表默认」无关, 换入口不丢.
+
 **入口分流**: 非演员实体进 `/catalog/$kind/$facetId`, 演员进 `/actors/$actorId` (演员不进入 `/catalog`); `FacetBadge` 默认深链分类, 筛选深链 `/meta`.
 
 **分类收藏**: 星形控件在分类列表的动作列与分类详情页标题行 (窄屏动作列只容一个按钮, 一律走详情页), 词云与索引页徽章只有只读星标; 单条与列表多选都提交 `POST /api/facets/{kind}/batch` 的 `favorite` / `unfavorite` 动作, 单条提交单元素列表, 两者都是整体赋值, 界面不做逐项取反; 「收藏」筛选与演员页的「有头像 / 无头像」同形, 用共享的三态分段控件放在高级筛选区, 取值是 URL search 上的字符串三态, 只在支持收藏的 kind 上渲染与发送; 索引页顶部的收藏区块按五个 kind 各取一次列表, 全部就绪且至少一项非空才渲染.
@@ -102,6 +106,8 @@ OpenAPI 字符串联合若需运行时迭代, 集中放置于 `lib/exhaustive-ma
 ## 图片
 
 外站图经由 `/api/resources/proxy` (`proxyImageUrl`); `<img>` 不能带 Authorization, 鉴权靠 cookie. 裁切基准是源图 (海报 `thumb_urls[0]`, 演员头像 `image_urls[0]`) 对应的 Resource 本地文件; 两者共用 `ImageCropDialog`, 只提交像素坐标, 不上传 blob.
+
+**封面只有条目这一份**: 缩略图取条目刮削到的 `poster_urls[0]` (手工裁切写回的派生 Resource 也挂在这份 URL 上), 服务端**不从视频截帧**, 也不生成缩放缩略图. 因此片库文件表 (`components/library/library-media-table.tsx`) 的行内缩略图读 `MediaFileResponse.poster_url`, 播放按钮挂在同一块封面上, 语义与海报墙一致 (启用外部播放器即拉起本机播放器, 否则打开共用的 `components/media/playback-modal.tsx`); 未绑定条目的文件只有占位块.
 
 相位水印是 CSS overlay (`FilePhaseOverlay`), 读列表聚合的 `file_phase`, 不修改 Resource 像素; 表格与文件列表仍用 `FilePhaseBadges`. `FanartLightbox` 必须 Portal 到 `document.body`. 外链图片的并发限流见 `components/media/proxy-image.tsx` 与 `lib/image-loader.ts` 的注释; 代理会下载上游原图并写入 `Resource`, 因此「对比来源」面板 (`components/metadata/merge-dialog.tsx`) 的图先渲染为与缩略图同形的占位块, 点击后才加载 — 展开面板不得触发回源.
 

@@ -24,6 +24,7 @@
   },
   "columns": {
     "number": "Number",
+    "poster": "Poster",
     "path": "Path",
     "status": "Status",
     "size": "Size",
@@ -32,10 +33,11 @@
     "actions": "Actions"
   },
   "actions": {
+    "play": "Play",
     "scrape": "Scrape",
     "scrapeWithNumber": "Scrape with number",
-    "batchScrape": "Batch Scrape",
-    "batchOrganize": "Batch Organize"
+    "batchScrape": "Scrape",
+    "batchOrganize": "Organize"
   },
   "scrapeOverride": {
     "title": "Scrape with number",

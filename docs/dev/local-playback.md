@@ -51,7 +51,7 @@ player = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"
 
 ## 4. 接口
 
-两个端点, 都在 `/api/playback` 下, 受既有的 Bearer / cookie 鉴权保护.
+三个端点, 都在 `/api/playback` 下, 受既有的 Bearer / cookie 鉴权保护.
 
 ### `GET /api/playback/local-player`
 
@@ -70,6 +70,12 @@ player = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"
 | 400 | `mode=custom` 但 `player` 为空; `file_id` 不属于该条目; 播放器或文件不存在 |
 | 404 | 条目不存在; 条目没有索引到文件; 没有视频文件; 全部视频文件都已不在磁盘上 |
 
+### `POST /api/playback/open-local`
+
+一次交出多个条目, 供播放列表使用. 请求体 `{ "metadata_ids": [3, 7, 9] }` (`1..200` 项, 可选 `file_id` 只对单条有效).
+
+响应与拒绝条件同上; 顺序**按请求里的 `metadata_ids`** 而定, 不是按体积 —— 播放列表的顺序是用户排的. 每条按第 5 节挑出各自的主文件, 跳过没有可播文件的条目; 一条都没有可播文件时才 404.
+
 路径**只取自条目索引**, 不接受任意地址. 这个动作的本质是"在服务所在机器上执行一个程序", 收窄到"已入库的文件 + 已配置的播放器"之后, 能触发的范围才是有界的.
 
 ## 5. 挑文件
@@ -77,12 +83,13 @@ player = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"
 | 情形 | 交给播放器 |
 |---|---|
 | 指定了 `file_id` | 只有那一条 |
-| `mode=system` | 体积最大的视频, **一条** |
+| `mode=system` 且单个文件 | 就是那个文件 |
+| `mode=system` 且多个文件 | 写一份临时 `.m3u`, 把列表文件交给关联程序 |
 | `mode=custom` | 体积最大的视频在前, 其余视频按入库顺序 (id 升序) 跟随 |
 
 非视频文件 (`jpg` / `nfo` / `srt`) 一律不入列 —— 扩展名取自 `amane.library.MEDIA_EXTENSIONS`. 主文件按体积取, 是因为条目下常混着预告与样片, 体积最大的那个才是正片. 缺少的文件被静默跳过; 全部缺失才报 404.
 
-系统关联只认一个路径, 所以 `system` 方式拿不到多文件列表. 要按顺序播多片 (CD1/CD2) 必须用 `custom`.
+系统关联只接受**一个路径**, 所以多文件时用一份临时 `.m3u` 承载列表语义 —— 播放器自己会展开成播放列表. 列表写在系统临时目录的 `amane-playlists/`, 内容为 `#EXTM3U` + 一行一个绝对路径 (UTF-8); 后缀用 `.m3u` 而不是 `.m3u8`, 后者容易被当成 HLS 清单. 这些文件不随请求删除 (播放器要读), 改为每次写入时顺手清掉超过 6 小时的旧文件.
 
 `mode=system` 时配置里的 `player` 一律忽略, 不会透传给拉起逻辑: 从 `custom` 切回 `system` 后旧路径仍留在 TOML 里, 若继续使用, "系统默认"就名不副实; 路径失效时更会直接报错, 而不是回退到关联程序. 接口返回的 `player` 也随之为 `null` —— 值取自"实际用到的程序", 不是配置.
 
@@ -100,10 +107,12 @@ player = "C:\\Program Files\\VideoLAN\\VLC\\vlc.exe"
 
 Windows 上没有关联程序时 `startfile` 抛 `winerror 1155`, 原文是英文资源串, 已转成 `系统没有与该格式关联的程序: .xxx`.
 
+**不经过 `cmd`**: 早先为了让播放器显示系统语言, 曾用 `cmd /c start` 拉起 (借命令解释器给子进程换一套干净环境). 那等于每播一次就起一个命令解释器, 杀软与用户都会把它当成可疑行为. 现在改为直接调系统 API; 环境问题在拉起前用 `_sanitize_process_env()` 从**本进程**的 `os.environ` 里摘掉 `LANG` / `LC_ALL` / `LC_MESSAGES` / `LANGUAGE` / `LC_CTYPE` 解决 (仅 Windows, 幂等) —— ShellExecute 无法为子进程单独注入环境, 只能这样改. 非 Windows 不动: `xdg-open` 依赖 locale 选择本地化名称与文本编码.
+
 **已实测** (Windows 11 + VLC 3.0.24):
 
 - `.mp4` / `.mkv` / `.avi` / `.wmv` / `.iso` 都已关联到 VLC, `startfile` 能真的把 Z: 盘上的 1.9 GB 文件交给它并开始解码;
-- `vlc a.mp4 b.mp4 c.mp4` 直接得到 3 项播放列表 (`rebuild done - 3 items`), 因此多文件不需要生成任何列表文件.
+- `vlc a.mp4 b.mp4 c.mp4` 直接得到 3 项播放列表 (`rebuild done - 3 items`), 因此 `custom` 多文件不需要生成任何列表文件.
 
 **限制**: 服务必须有可见桌面会话. 装成 Windows 服务或计划任务 (session 0) 时, 调用不报错, 但窗口不会出现. 这条没有实测, 是按 session 0 的窗口站隔离推断的.
 
@@ -130,21 +139,25 @@ Windows 上没有关联程序时 `startfile` 抛 `winerror 1155`, 原文是英�
 
 | 文件 | 作用 |
 |---|---|
-| `src/amane/config/manager.py` | `PlaybackConfig` / `ExternalPlayerMode`, 挂在 `HotSettings.playback` |
-| `src/amane/playback/local_player.py` | 拉起逻辑与 `LocalPlayerError` |
-| `src/amane/api/routes/playback.py` | 两个端点与文件挑选 |
-| `src/amane/api/models/playback.py` | `PlaybackLocalPlayerResponse` / `PlaybackLocalOpenResponse` |
+| `src/amane/config/manager.py` | `PlaybackConfig` / `ExternalPlayerMode`, 挂在 `HotSettings.playback`; `InterfaceConfig.restore_list_state` 在 `HotSettings.interface` |
+| `src/amane/playback/local_player.py` | 拉起逻辑、临时 `.m3u` 与 `LocalPlayerError` |
+| `src/amane/api/routes/playback.py` | 三个端点与文件挑选 |
+| `src/amane/api/models/playback.py` | `PlaybackLocalPlayerResponse` / `PlaybackLocalOpenResponse` / `PlaybackLocalOpenRequest` |
 | `web/src/lib/media/local-player.ts` | `useLocalPlayer` / `useOpenLocalPlayback` / `canLaunchLocalPlayer` |
+| `web/src/stores/playlist.ts` | 播放列表队列 (persist), `append` 去重不清空 |
+| `web/src/lib/media/playlist-entries.ts` | 条目 → 队列项的投影 |
+| `web/src/components/media/playlist-drawer.tsx` | 右侧播放列表浮层 |
+| `web/src/components/media/playback-queue-modal.tsx` | 内置播放器的队列 (上一项 / 下一项) |
 | `web/src/components/media/metadata-detail.tsx` | 封面按钮语义 |
 | `web/src/components/media/playback-panel.tsx` | 外部模式卡片、播放请求、无来源提示 |
 | `web/src/components/schema-form/fields/radio-rows-field.tsx` | `x-widget: "RadioRows"` |
 | `web/src/i18n/locales/{zh-CN,en}/settings.json` | 设置页文案 |
-| `web/src/i18n/locales/{zh-CN,en}/metadata.json` | 详情页文案 |
+| `web/src/i18n/locales/{zh-CN,en}/metadata.json` | 详情页与播放列表文案 |
 
 ## 9. 测试
 
-- `tests/api/test_playback.py`: 6 例 —— 默认关闭、未开开关拒绝、`system` 只传一个、`custom` 传全部视频且封面图不入列、四种拒绝、越权 `file_id`.
-- `tests/playback/test_local_player.py`: 3 例 —— 空列表、文件不存在、播放器不存在.
+- `tests/api/test_playback.py`: 8 例 —— 默认关闭、未开开关拒绝、`system` 只传一个、`custom` 传全部视频且封面图不入列、四种拒绝、越权 `file_id`、多条目按请求顺序入列、多条目在开关关闭时 403.
+- `tests/playback/test_local_player.py`: 4 例 —— 空列表、文件不存在、播放器不存在、临时 `.m3u` 带上全部路径.
 
 ## 10. 没有做的
 

@@ -1,13 +1,18 @@
 /**
- * 片库列表的高级 facet 筛选: 展开后每个 kind 独立短搜索框, 选中即追加到 URL search.
+ * 片库列表的高级 facet 筛选: 展开后每个 kind 独立多选框, 一次可勾多个, 勾完即写回 URL search.
  * 另含媒体库、条目类型与关联文件相位筛选.
  */
 
-import { Collapse, MultiSelect, Select, SimpleGrid, Stack, Text } from "@mantine/core";
-import { useQuery } from "@tanstack/react-query";
+import { Collapse, Group, MultiSelect, Select, SimpleGrid, Stack, Text } from "@mantine/core";
+import { IconCheck } from "@tabler/icons-react";
+import { useQueries, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { listFacetsOptions, listLibrariesOptions } from "@/client/@tanstack/react-query.gen";
+import {
+  getFacetOptions,
+  listFacetsOptions,
+  listLibrariesOptions,
+} from "@/client/@tanstack/react-query.gen";
 import type { ContentType, FacetKind, Mosaic } from "@/client/types.gen";
 import { CONTENT_TYPES, FACET_KINDS, FILE_DEFINITIONS, MOSAICS } from "@/lib/exhaustive-maps";
 import { facetIdsOf, type FacetFilters } from "@/lib/facets";
@@ -28,9 +33,10 @@ export type FilePhaseFilters = {
 interface FacetFilterControlsProps {
   /** 是否展开高级筛选表单. */
   opened: boolean;
-  /** 当前已激活的过滤参数; 已选同一实体时禁用对应选项. */
+  /** 当前已激活的过滤参数; 多选控件直接回填已选的 id. */
   filters: FacetFilters;
-  onSelect: (kind: FacetKind, id: number) => void;
+  /** 某个 kind 的选中项整组变化 (空数组 = 取消该 kind 的筛选). */
+  onChangeFacet: (kind: FacetKind, ids: number[]) => void;
   /** 媒体库筛选; 空数组 = 不限. */
   libraryIds: readonly number[];
   onLibraryIdsChange: (ids: number[]) => void;
@@ -81,12 +87,12 @@ function LibraryPicker({
 function KindFacetPicker({
   kind,
   filters,
-  onSelect,
+  onChangeFacet,
   enabled,
 }: {
   kind: FacetKind;
   filters: FacetFilters;
-  onSelect: (kind: FacetKind, id: number) => void;
+  onChangeFacet: (kind: FacetKind, ids: number[]) => void;
   enabled: boolean;
 }) {
   const { t } = useTranslation("metadata");
@@ -102,29 +108,66 @@ function KindFacetPicker({
     enabled,
   });
 
-  const selected = new Set(facetIdsOf(filters, kind));
-  const options = (data?.items ?? []).map((facet) => ({
+  const selectedIds = facetIdsOf(filters, kind);
+  const items = data?.items ?? [];
+  // label 只放名称: MultiSelect 的 chip 直接取 option.label, 带上计数就会写成 "4K (2060)" 这种噪音.
+  // 计数改由 renderOption 在下拉里单独摆.
+  const counts = new Map(items.map((facet) => [String(facet.id), facet.count]));
+  const options = items.map((facet) => ({
     value: String(facet.id),
-    label: `${facet.name} (${facet.count})`,
-    disabled: selected.has(facet.id),
+    label: facet.name,
   }));
 
+  // 已选但不在当前结果集里的项也要显示, 否则搜索框一改, 选中项看起来就丢了.
+  // 补占位项而不是只塞进 value: 不在 data 里的 value 显示不出来, 看起来就"被取消了".
+  // 占位项的名称单独按 id 拉 (一次一个, 只对挤出去的已选项发请求), 否则 chip 上只剩 "7" 这种 id.
+  const known = new Set(options.map((option) => option.value));
+  const missingIds = selectedIds.filter((id) => !known.has(String(id)));
+  const missingNames = useQueries({
+    queries: missingIds.map((id) => ({
+      ...getFacetOptions({ path: { kind, facet_id: id } }),
+      staleTime: Infinity,
+    })),
+  });
+  const pinned = missingIds.map((id, index) => ({
+    value: String(id),
+    label: missingNames[index]?.data?.name ?? `#${id}`,
+  }));
+  const value = selectedIds.map(String);
+
   return (
-    <Select
+    <MultiSelect
       label={t(`browse.kinds.${kind}`)}
       placeholder={t("search.facetPlaceholder")}
-      data={options}
-      value={null}
+      data={[...options, ...pinned]}
+      value={value}
       searchable
       searchValue={search}
       onSearchChange={setSearch}
       nothingFoundMessage={isFetching ? "…" : t("search.facetEmpty")}
-      onChange={(v) => {
-        if (v == null) return;
-        const id = Number(v);
-        if (!Number.isInteger(id) || id <= 0) return;
-        onSelect(kind, id);
-        setSearch("");
+      onChange={(values) => {
+        const ids = values.map(Number).filter((id) => Number.isInteger(id) && id > 0);
+        onChangeFacet(kind, ids);
+      }}
+      hidePickedOptions={false}
+      // 换掉默认内容就丢了勾选图标, 自己补一个; 顺手把计数摆在右侧.
+      renderOption={({ option, checked }) => {
+        const count = counts.get(option.value);
+        return (
+          <Group justify="space-between" w="100%" wrap="nowrap" gap="xs">
+            <Group gap={6} wrap="nowrap" style={{ minWidth: 0 }}>
+              <IconCheck size={12} style={{ visibility: checked ? "visible" : "hidden" }} />
+              <Text size="sm" truncate="end">
+                {option.label}
+              </Text>
+            </Group>
+            {count === undefined ? null : (
+              <Text size="xs" c="dimmed">
+                {count}
+              </Text>
+            )}
+          </Group>
+        );
       }}
       clearable
       size="sm"
@@ -168,7 +211,7 @@ function parseDefinition(value: string | null): (typeof FILE_DEFINITIONS)[number
 export function FacetFilterControls({
   opened,
   filters,
-  onSelect,
+  onChangeFacet,
   libraryIds,
   onLibraryIdsChange,
   hasFiles,
@@ -196,7 +239,7 @@ export function FacetFilterControls({
               key={kind}
               kind={kind}
               filters={filters}
-              onSelect={onSelect}
+              onChangeFacet={onChangeFacet}
               enabled={opened}
             />
           ))}

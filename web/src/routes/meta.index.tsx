@@ -1,5 +1,5 @@
-import { ActionIcon, Badge, Group, SegmentedControl, Text, TextInput, Title } from "@mantine/core";
-import { IconFilter, IconSearch, IconTable, IconX } from "@tabler/icons-react";
+import { ActionIcon, Badge, Group, SegmentedControl, Text, Title } from "@mantine/core";
+import { IconFilter, IconTable, IconX } from "@tabler/icons-react";
 import { useInfiniteQuery, useQuery } from "@tanstack/react-query";
 import { createFileRoute, stripSearchParams } from "@tanstack/react-router";
 import { useMemo, useRef, useState } from "react";
@@ -16,6 +16,7 @@ import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { InfiniteScrollSentinel } from "@/components/common/infinite-scroll-sentinel";
 import { ListDefaultActions } from "@/components/common/list-default-actions";
 import { PageSizeSelect } from "@/components/common/page-size-select";
+import { SearchInput } from "@/components/common/search-input";
 import { SortMenu } from "@/components/common/sort-menu";
 import { FacetBadge } from "@/components/media/facet-badge";
 import {
@@ -26,10 +27,13 @@ import {
 import { GridColumnsSlider } from "@/components/media/grid-columns-slider";
 import { MetaTable } from "@/components/media/meta-table";
 import { PosterGrid } from "@/components/media/poster-grid";
-import { activeFacetFilters, addFacetId, type FacetFilters, removeFacetId } from "@/lib/facets";
+import { activeFacetFilters, type FacetFilters, removeFacetId, setFacetIds } from "@/lib/facets";
+import { useListStateMemory } from "@/hooks/use-list-state-memory";
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
+import { useResettingState } from "@/hooks/use-resetting-state";
 import { nextOffsetPageParam } from "@/lib/infinite-list";
 import { metaSearchSchema, METADATA_SORT_OPTIONS } from "@/lib/media/browse";
+import { useFavoriteTagId } from "@/lib/media/favorites";
 import { metaListDefaults } from "@/lib/nav-defaults";
 import { useUIStore } from "@/stores/ui";
 
@@ -131,6 +135,12 @@ function MetaIndexPage() {
   const navigate = Route.useNavigate();
   const listLimit = useUIStore((s) => s.pageSizes.metaList);
   const narrowViewport = useNarrowViewport("md");
+  // 离开后从侧栏「片库」回来要还原的那份 search. 收藏与片库共用本页路径, 收藏那份不记:
+  // 记进去的话下次点「片库」会把收藏筛选带回来, 而收藏入口自己会重置成固定筛选.
+  const favoriteTagId = useFavoriteTagId().data ?? null;
+  const isFavoriteView =
+    favoriteTagId != null && (search.user_tag_id ?? []).includes(favoriteTagId);
+  useListStateMemory("meta", search, { enabled: !isFavoriteView });
 
   const hasFiles = parseHasFiles(search.has_files);
   const vr = parseHasFiles(search.vr);
@@ -148,7 +158,7 @@ function MetaIndexPage() {
     filePhase.mosaic != null ||
     filePhase.definition != null ||
     filePhase.content_type != null;
-  const [searchInput, setSearchInput] = useState(search.q ?? "");
+  const [searchInput, setSearchInput] = useResettingState(() => search.q ?? "", search.q);
   const [advancedOpen, setAdvancedOpen] = useState(
     hasFiles !== null || vr !== null || phaseActive || libraryIds.length > 0,
   );
@@ -222,10 +232,10 @@ function MetaIndexPage() {
     }, 300);
   }
 
-  function appendFacet(kind: FacetKind, id: number) {
+  function replaceFacet(kind: FacetKind, ids: number[]) {
     void navigate({
       search: (prev) => {
-        const next = addFacetId(
+        const next = setFacetIds(
           {
             actor_id: prev.actor_id,
             director_id: prev.director_id,
@@ -236,7 +246,7 @@ function MetaIndexPage() {
             user_tag_id: prev.user_tag_id,
           },
           kind,
-          id,
+          ids,
         );
         return { ...prev, ...next, page: 1 };
       },
@@ -348,12 +358,12 @@ function MetaIndexPage() {
         </Text>
       }
       search={
-        <TextInput
+        <SearchInput
           value={searchInput}
-          onChange={(e) => handleSearchChange(e.currentTarget.value)}
+          onChange={handleSearchChange}
+          onSubmit={handleSearchChange}
           placeholder={t("search.placeholder")}
-          leftSection={<IconSearch size={16} />}
-          w="100%"
+          historyKey="meta"
         />
       }
       extras={
@@ -399,7 +409,7 @@ function MetaIndexPage() {
         <FacetFilterControls
           opened={narrowViewport || advancedOpen}
           filters={filters}
-          onSelect={appendFacet}
+          onChangeFacet={replaceFacet}
           libraryIds={libraryIds}
           onLibraryIdsChange={(ids) =>
             void navigate({

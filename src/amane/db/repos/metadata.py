@@ -277,6 +277,16 @@ class MetadataRepoMixin(RepositoryMixinBase):
             rows = (await session.exec(stmt)).all()
             return {row_id: content_type for row_id, content_type in rows if row_id is not None}
 
+    async def posters_by_metadata_ids(self, metadata_ids: Sequence[int]) -> dict[int, str | None]:
+        """文件行的封面预览: 取条目首个 poster_url. 无条目不在结果里, 有条目但未刮到封面为 None."""
+        unique = list(dict.fromkeys(metadata_ids))
+        if not unique:
+            return {}
+        async with self._session() as session:
+            stmt = select(col(Metadata.id), col(Metadata.poster_urls)).where(col(Metadata.id).in_(unique))
+            rows = (await session.exec(stmt)).all()
+            return {row_id: urls[0] if urls else None for row_id, urls in rows if row_id is not None}
+
     async def upsert_metadata(
         self,
         number: str,

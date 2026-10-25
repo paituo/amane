@@ -68,6 +68,16 @@ export function removeFacetId(filters: FacetFilters, kind: FacetKind, id: number
   return { ...filters, [param]: next.length > 0 ? next : undefined };
 }
 
+/** 整组替换某个 kind 的选中项 (多选控件一次改多个时用); 空数组等于取消该 kind 的筛选. */
+export function setFacetIds(
+  filters: FacetFilters,
+  kind: FacetKind,
+  ids: readonly number[],
+): FacetFilters {
+  const param = FACET_FILTER_PARAM[kind];
+  return { ...filters, [param]: ids.length > 0 ? [...ids] : undefined };
+}
+
 export function activeFacetFilters(filters: FacetFilters): Array<{ kind: FacetKind; id: number }> {
   const entries: Array<{ kind: FacetKind; id: number }> = [];
   for (const kind of FACET_KINDS) {

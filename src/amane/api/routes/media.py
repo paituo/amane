@@ -34,9 +34,20 @@ def _require_known_definition(definition: str | None) -> str | None:
 
 
 async def _phase_responses(repo: Repository, items: Sequence[MediaFile]) -> list[MediaFileResponse]:
-    """文件行的有码 / 无码取自所属条目类型, 因此要批量补一次条目类型."""
-    types = await repo.content_types_by_metadata_ids([m.metadata_id for m in items if m.metadata_id is not None])
-    return [to_media_file_response(m, types.get(m.metadata_id) if m.metadata_id is not None else None) for m in items]
+    """文件行的有码 / 无码与封面都取自所属条目, 因此按 metadata_id 批量补两次."""
+    metadata_ids = [m.metadata_id for m in items if m.metadata_id is not None]
+    types = await repo.content_types_by_metadata_ids(metadata_ids)
+    posters = await repo.posters_by_metadata_ids(metadata_ids)
+
+    def one(media: MediaFile) -> MediaFileResponse:
+        metadata_id = media.metadata_id
+        return to_media_file_response(
+            media,
+            types.get(metadata_id) if metadata_id is not None else None,
+            posters.get(metadata_id) if metadata_id is not None else None,
+        )
+
+    return [one(m) for m in items]
 
 
 @router.get("")
