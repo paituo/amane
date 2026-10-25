@@ -37,6 +37,23 @@ class LaunchResult:
     """播放器的文件名; ``None`` 表示交给系统关联程序, 文案由前端拼."""
 
 
+def _clean_env() -> dict[str, str] | None:
+    """去掉 POSIX 语言环境变量, 让播放器回退到操作系统界面语言.
+
+    VLC 等基于 Qt 的播放器会读取 ``LANG`` / ``LC_ALL`` / ``LANGUAGE`` 来决定界面语言. 当 amane
+    以控制台方式 (如 Git Bash / 终端) 启动时, 这些变量常是 ``en_US.UTF-8`` / ``C.UTF-8``,
+    子进程会继承它们, 于是被拉起的播放器显示英文; 而直接双击播放器时继承的是桌面环境, 没有这些
+    变量, 显示的是系统语言 (中文). 这里把它们从子进程环境里剔除, 使两种启动方式表现一致.
+    """
+    if sys.platform != "win32":
+        # 非 Windows 下保持父进程环境, 避免影响 xdg-open 等对 locale 的依赖.
+        return None
+    env = os.environ.copy()
+    for key in ("LANG", "LC_ALL", "LC_MESSAGES", "LANGUAGE", "LC_CTYPE"):
+        env.pop(key, None)
+    return env
+
+
 def _spawn(argv: list[str]) -> None:
     """拉起后立刻返回. 三个流都断开, 避免子进程继承 Web 服务的管道."""
     subprocess.Popen(
@@ -45,6 +62,7 @@ def _spawn(argv: list[str]) -> None:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
         close_fds=True,
+        env=_clean_env(),
     )
 
 
@@ -72,7 +90,17 @@ def launch_local_player(paths: Sequence[Path], *, player: str = "") -> LaunchRes
     target = targets[0]
     try:
         if sys.platform == "win32":
-            os.startfile(target)  # type: ignore[attr-defined]
+            # 用 cmd 的 start 走系统关联; 这样才能注入干净的环境 (`os.startfile` 不接受 env).
+            # 第二个空串是 start 的 "标题" 参数, 路径含空格时必须放在它之后, 否则会被当成标题.
+            subprocess.Popen(
+                ["cmd", "/c", "start", "", str(target)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                env=_clean_env(),
+                shell=False,
+            )
         elif sys.platform == "darwin":
             _spawn(["open", str(target)])
         else:

@@ -435,3 +435,29 @@ class TestMetadataHttp:
 
         filtered = await client.get("metadata?search=共演&content_type=uncensored&limit=10")
         assert filtered.json()["items"] == []
+
+    @pytest.mark.asyncio(loop_scope="function")
+    async def test_search_total_is_window_not_page_size(self, client: AsyncClient, repo: Repository, app: FastAPI):
+        """``total`` 必须是召回窗口内的命中数, 不能塌成"本页条数".
+
+        曾经 ``_ranked_page`` 拿 ``len(items)`` 当 total, 而候选只取到 ``offset + limit``:
+        第一页请求 (limit=30) 就报 total=30, 前端 ``loaded < total`` 立刻不成立,
+        搜索看起来永远只有一页. 这里用 35 条覆盖"超过一页且能翻到底".
+        """
+        for index in range(35):
+            await repo.upsert_metadata(number=f"WIN-{index:03d}", title=f"窗测 第{index}话")
+        await app.state.runtime.search.indexer.drain()
+
+        first = await client.get("metadata?search=窗测&limit=30")
+        assert first.status_code == 200
+        assert len(first.json()["items"]) == 30
+        # 关键断言: 第一页就要如实报出整窗 35 条, 而不是 30.
+        assert first.json()["total"] == 35
+
+        rest = await client.get("metadata?search=窗测&limit=30&offset=30")
+        assert len(rest.json()["items"]) == 5
+        assert rest.json()["total"] == 35
+
+        beyond = await client.get("metadata?search=窗测&limit=30&offset=35")
+        assert beyond.json()["items"] == []
+        assert beyond.json()["total"] == 35

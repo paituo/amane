@@ -157,7 +157,15 @@
     "playbackCopyTimestamp": "Copy timestamp",
     "playbackCopyLink": "Copy link to current time",
     "playbackCopied": "Copied to clipboard",
-    "playbackCopyFailed": "Copy failed"
+    "playbackCopyFailed": "Copy failed",
+    "tabs": {
+      "movie": "Movie info",
+      "video": "Video info",
+      "comments": "Comments"
+    },
+    "more": "More",
+    "lockManage": "Lock management",
+    "videoPending": "Media probe data (duration, codec, resolution…) will appear here once the probe endpoint is connected"
   },
   "browse": {
     "title": "Browse",

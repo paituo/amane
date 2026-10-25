@@ -96,8 +96,46 @@ class MetadataFilters:
     id_subquery_sql: str | None = None
 
 
-async def _ranked_search(runtime: AppRuntime, query: str | None, *, offset: int, limit: int) -> SearchResult | None:
-    """走索引时的候选 id (按相关度). 无索引或未启用时返回 None, 调用方退回子串扫描."""
+def _has_scope_filters(filters: MetadataFilters) -> bool:
+    """除检索词与排序之外是否还有筛选条件.
+
+    有筛选就必须对召回窗口整体求交, 不能先按页切片 —— 切片后的筛除会让 ``total`` 偏小、
+    页边界也跟着错位. 只带检索词时才能安全地先切片再取详情.
+    """
+    if filters.id_subquery_sql is not None:
+        return True
+    for scope in (
+        filters.actor_ids,
+        filters.director_ids,
+        filters.tag_ids,
+        filters.studio_ids,
+        filters.publisher_ids,
+        filters.series_ids,
+        filters.user_tag_ids,
+        filters.library_ids,
+    ):
+        if scope:
+            return True
+    return any(
+        value is not None
+        for value in (
+            filters.has_files,
+            filters.has_subtitle,
+            filters.vr,
+            filters.mosaic,
+            filters.uncensored,
+            filters.definition,
+            filters.content_type,
+        )
+    )
+
+
+async def _ranked_search(runtime: AppRuntime, query: str | None) -> SearchResult | None:
+    """走索引时的候选 id (按相关度). 无索引或未启用时返回 None, 调用方退回子串扫描.
+
+    一次取满召回窗口而不是只取 ``offset + limit``: ``SearchResult.total`` 是"窗口内命中数",
+    只取本页深度会让它等于本页条数, 前端据此判断"没有下一页"就再也翻不动了.
+    """
     if not query:
         return None
     stack = runtime.search
@@ -106,8 +144,7 @@ async def _ranked_search(runtime: AppRuntime, query: str | None, *, offset: int,
     # 写入是异步索引的, 这里等一小会儿换取"读己之写"; 积压太深就按现有索引返回.
     await stack.indexer.wait_idle(INDEX_WAIT_S)
     # 翻页深度不能超过召回窗口: 向量路只保证 window 内有序, 再往后没有可信顺序.
-    window = stack.service.recall_window
-    return await stack.service.search(query, limit=min(offset + limit, window))
+    return await stack.service.search(query, limit=stack.service.recall_window)
 
 
 async def _ranked_page(
@@ -117,19 +154,33 @@ async def _ranked_page(
     *,
     offset: int,
     limit: int,
+    cap: int,
 ) -> MetadataListResponse:
     """候选 id 已按相关度排好; 这里只做"与其它筛选求交 + 分页", 不再排序.
 
-    ``total`` 是**过筛选后的候选数**, 受召回窗口限制而不是全库精确计数 —— 与 ``KEYWORD`` 模式
-    的语义差异由 ``search_mode`` 对外声明, 见 ``docs/dev/search.md``.
+    ``total`` 是**窗口内过筛选后的候选数**, 上限为召回窗口 ``cap``. 早先直接取 ``len(items)``,
+    而 items 最多只覆盖到 ``offset + limit`` —— 第一页就对外报 ``total = 30``, 前端
+    ``loaded < total`` 立刻不成立, 搜索看起来被锁死在一页里.
     """
     if not ranked.ids:
         return MetadataListResponse(items=[], total=0, search_mode=ranked.mode, search_degraded=ranked.degraded)
-    items, _ = await _fetch_metadata(repo, filters, ids=ranked.ids, offset=0, limit=len(ranked.ids))
+    total = min(max(ranked.total, len(ranked.ids)), cap)
     position = {metadata_id: index for index, metadata_id in enumerate(ranked.ids)}
-    items.sort(key=lambda m: position.get(m.id or 0, len(position)))
-    page = items[offset : offset + limit]
-    return await _list_response(repo, page, total=len(items), mode=ranked.mode, degraded=ranked.degraded)
+    if _has_scope_filters(filters):
+        # 有筛选时必须整个窗口一起求交: 先切片再过滤会既少算 total 又让页边界错位.
+        items, _ = await _fetch_metadata(repo, filters, ids=ranked.ids, offset=0, limit=len(ranked.ids))
+        items.sort(key=lambda m: position.get(m.id or 0, len(position)))
+        total = len(items)
+        page = items[offset : offset + limit]
+    else:
+        # 只有检索词时按页切片再取详情, 不必为了一页把整个窗口的记录都读出来.
+        page_ids = ranked.ids[offset : offset + limit]
+        if not page_ids:
+            return MetadataListResponse(items=[], total=total, search_mode=ranked.mode, search_degraded=ranked.degraded)
+        items, _ = await _fetch_metadata(repo, filters, ids=page_ids, offset=0, limit=len(page_ids))
+        items.sort(key=lambda m: position.get(m.id or 0, len(position)))
+        page = items
+    return await _list_response(repo, page, total=total, mode=ranked.mode, degraded=ranked.degraded)
 
 
 @router.get("/schema")
@@ -174,7 +225,7 @@ async def list_metadata(
     if saved_query_id is not None:
         id_subquery_sql = await resolve_saved_query_id_subquery(repo, saved_query_id, SavedQueryEntity.METADATA)
 
-    ranked = await _ranked_search(runtime, search, offset=offset, limit=limit)
+    ranked = await _ranked_search(runtime, search)
     filters = MetadataFilters(
         sort_by=sort_by,
         order=order,
@@ -196,7 +247,10 @@ async def list_metadata(
         id_subquery_sql=id_subquery_sql,
     )
     if ranked is not None:
-        return await _ranked_page(repo, ranked, filters, offset=offset, limit=limit)
+        # 召回窗口是 total 的上限: 窗口外没有可信顺序, 也就没有必要对外声称还有更深的结果.
+        stack = runtime.search
+        cap = stack.service.recall_window if stack is not None else len(ranked.ids)
+        return await _ranked_page(repo, ranked, filters, offset=offset, limit=limit, cap=cap)
 
     items, total = await _fetch_metadata(repo, filters, ids=None, offset=offset, limit=limit, keyword=search)
     return await _list_response(repo, items, total=total, mode=SearchMode.LIKE)

@@ -4,13 +4,12 @@ import {
   Badge,
   Box,
   Button,
-  Card,
   Group,
   Loader,
   Menu,
   Modal,
-  SimpleGrid,
   Stack,
+  Tabs,
   Text,
   Title,
   Tooltip,
@@ -20,7 +19,9 @@ import { notifications } from "@mantine/notifications";
 import {
   IconAlertCircle,
   IconCheck,
+  IconChevronRight,
   IconCrop,
+  IconDotsVertical,
   IconExternalLink,
   IconFolders,
   IconGitMerge,
@@ -57,8 +58,8 @@ import { FacetBadge } from "@/components/media/facet-badge";
 import { LockChip, LockToggle, type LockProps } from "@/components/media/field-lock";
 import { UserTagActions } from "@/components/media/user-tag-add";
 import { VrBadge } from "@/components/media/vr-badge";
-import { FanartLightbox, FanartStrip } from "@/components/media/fanart-lightbox";
-import { FilePhaseBadges, FilePhaseOverlay } from "@/components/media/file-phase-badges";
+import { FanartLightbox } from "@/components/media/fanart-lightbox";
+import { FilePhaseOverlay } from "@/components/media/file-phase-badges";
 import { PosterCropDialog } from "@/components/media/poster-crop-dialog";
 import { MergeDialog } from "@/components/metadata/merge-dialog";
 import { type JSONSchemaObject, resolveSchema } from "@/components/schema-form/schema";
@@ -103,6 +104,24 @@ function FieldBlock({
     </div>
   );
 }
+
+/** 视频信息 Tab 的占位字段: 后端媒体探测接口接入前先以空值陈列, 不读取真实数据. */
+const VIDEO_INFO_FIELDS = [
+  "视频格式",
+  "时长",
+  "帧率",
+  "总码率",
+  "分辨率",
+  "宽高比",
+  "位深度",
+  "总帧数",
+  "音频格式",
+  "音频码率",
+  "采样率",
+  "声道数",
+  "文件后缀",
+  "文件大小",
+];
 
 export interface MetadataDetailProps {
   /** 路由参数原值: 详情路由把它写在地址栏上, 弹窗场景取自列表里的 id. */
@@ -172,12 +191,16 @@ export function MetadataDetail({
 
   const id = Number(metadataId);
   const validId = Number.isInteger(id) && id > 0;
+  // 剧照画廊的当前图. 声明在下面那段"渲染期同步"之前, 换片时才能一起复位.
+  const [activeIdx, setActiveIdx] = useState(0);
   const [prevId, setPrevId] = useState(id);
   if (id !== prevId) {
     setPrevId(id);
     setThumbBroken(false);
     setPosterBroken(false);
     setPlayNonce(0);
+    // 换片回到主图: 渲染期直接调整比 useEffect 少一轮级联渲染.
+    setActiveIdx(0);
   }
 
   const { data, isLoading, isError } = useQuery({
@@ -364,6 +387,24 @@ export function MetadataDetail({
     }
   }
 
+  // 剧照画廊: 这三个 hook 必须在 early return 之前声明, 否则 loading→loaded 两次渲染的 hook
+  // 数量不一致, React 会抛 #310 (Rendered more hooks than during the previous render).
+  const galleryImageSrc = useMemo(() => {
+    const m = data?.metadata;
+    if (!m) return [] as string[];
+    const thumb = m.thumb_url ?? m.thumb_urls?.[0] ?? null;
+    const poster = m.poster_url ?? m.poster_urls?.[0] ?? null;
+    const cover = thumb && !thumbBroken ? thumb : poster && !posterBroken ? poster : null;
+    const coverUrl = proxyImageUrl(cover);
+    const list: string[] = [];
+    if (coverUrl) list.push(coverUrl);
+    for (const u of m.extrafanart ?? []) {
+      const prox = proxyImageUrl(u) ?? u;
+      if (prox) list.push(prox);
+    }
+    return list;
+  }, [data, thumbBroken, posterBroken]);
+
   if (!validId) {
     return (
       <Alert color="red" icon={<IconAlertCircle size={18} />}>
@@ -392,8 +433,13 @@ export function MetadataDetail({
     thumbSrc && !thumbBroken ? thumbSrc : posterSrc && !posterBroken ? posterSrc : null;
   const coverUrl = proxyImageUrl(coverSrc);
   const coverFailed = Boolean((thumbSrc || posterSrc) && !coverUrl);
-  const hasExtrafanart = item.extrafanart && item.extrafanart.length > 0;
   const runtime = formatRuntime(item.runtime);
+  const firstLibraryId = data.files?.[0]?.library_id ?? null;
+  // 剧照画廊当前激活图 (hook 已上移至 early return 之前, 这里只取值).
+  const activeImage =
+    galleryImageSrc.length > 0
+      ? galleryImageSrc[Math.min(activeIdx, galleryImageSrc.length - 1)]
+      : null;
   const allLocked = LOCKABLE_FIELDS.every((field) => lockedFields.has(field));
 
   function applyLocks(fields: readonly MetadataField[], pending: MetadataField | null = null) {
@@ -494,7 +540,158 @@ export function MetadataDetail({
     // 下沿留出的空白比其余三边大得多: 滚到底时末尾的卡片不贴视口底边, 还能再滚一截.
     // 弹窗自带滚动容器, 这份留白会变成多余的空白, 交给 `embedded` 关掉.
     <Stack gap="md" pb={embedded ? undefined : "calc(var(--amane-vh) * 0.1)"}>
-      <Group align="flex-start" wrap="wrap" gap="lg" style={{ flexDirection: "row-reverse" }}>
+      <Group justify="space-between" align="center" wrap="wrap" gap="xs" mb="xs">
+        <Group gap={6} align="center" wrap="nowrap" style={{ minWidth: 0 }}>
+          <Title order={5} ff="monospace">
+            {item.number}
+          </Title>
+          {item.title && (
+            <Text size="sm" c="dimmed" truncate>
+              {item.title}
+            </Text>
+          )}
+        </Group>
+        <Group gap={4} wrap="nowrap">
+          <Button
+            size="xs"
+            variant={isFavorite ? "light" : "default"}
+            color={isFavorite ? "yellow" : undefined}
+            loading={favoriteMutation.isPending}
+            aria-pressed={isFavorite}
+            leftSection={
+              isFavorite ? <IconStar size={14} fill="currentColor" /> : <IconStar size={14} />
+            }
+            onClick={() => favoriteMutation.mutate({ metadataId: id, favorite: !isFavorite })}
+          >
+            {isFavorite ? t("favorite.remove") : t("favorite.add")}
+          </Button>
+          <Button
+            size="xs"
+            variant="filled"
+            leftSection={<IconPlayerPlay size={14} />}
+            onClick={startPlayback}
+          >
+            {t("detail.play")}
+          </Button>
+          <Menu shadow="md" position="bottom-end" withinPortal>
+            <Menu.Target>
+              <Button
+                size="xs"
+                variant="light"
+                leftSection={<IconRefresh size={14} />}
+                loading={scrapeMutation.isPending}
+              >
+                {t("actions.scrape")}
+              </Button>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu.Item
+                onClick={() =>
+                  scrapeMutation.mutate({ body: { type: "scrape", number: item.number } })
+                }
+              >
+                <Text size="sm">{t("common:actions.scrapeNormal")}</Text>
+                <Text size="xs" c="dimmed">
+                  {t("common:actions.scrapeNormalDesc")}
+                </Text>
+              </Menu.Item>
+              <Menu.Item
+                onClick={() =>
+                  scrapeMutation.mutate({
+                    body: { type: "scrape", number: item.number, use_cache: [] },
+                  })
+                }
+              >
+                <Text size="sm">{t("common:actions.scrapeForce")}</Text>
+                <Text size="xs" c="dimmed">
+                  {t("common:actions.scrapeForceDesc")}
+                </Text>
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPencil size={14} />}
+            onClick={() => setEditOpen(true)}
+          >
+            {t("common:actions.edit")}
+          </Button>
+          {firstLibraryId != null && (
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              aria-label={t("detail.openInLibrary")}
+              onClick={() =>
+                void navigate({
+                  to: "/libraries/$libraryId",
+                  params: { libraryId: String(firstLibraryId) },
+                  search: { q: item.number },
+                })
+              }
+            >
+              <IconFolders size={18} />
+            </ActionIcon>
+          )}
+          <Menu shadow="md" position="bottom-end" withinPortal>
+            <Menu.Target>
+              <ActionIcon variant="subtle" size="md" aria-label={t("detail.more")}>
+                <IconDotsVertical size={18} />
+              </ActionIcon>
+            </Menu.Target>
+            <Menu.Dropdown>
+              <Menu position="left-start" trigger="hover" withinPortal>
+                <Menu.Target>
+                  <Menu.Item
+                    leftSection={<IconLock size={14} />}
+                    rightSection={<IconChevronRight size={14} />}
+                  >
+                    {t("detail.lockManage")}
+                  </Menu.Item>
+                </Menu.Target>
+                <Menu.Dropdown>
+                  <Menu.Item onClick={() => applyLocks(allLocked ? [] : LOCKABLE_FIELDS)}>
+                    {allLocked ? t("lock.clearAll") : t("lock.all")}
+                  </Menu.Item>
+                  <Menu.Divider />
+                  {LOCKABLE_FIELDS.map((field) => (
+                    <Menu.Item
+                      key={field}
+                      onClick={() => toggleLock(field)}
+                      leftSection={
+                        lockedFields.has(field) ? (
+                          <IconLock size={14} />
+                        ) : (
+                          <IconLockOpen size={14} />
+                        )
+                      }
+                      rightSection={lockedFields.has(field) ? <IconCheck size={14} /> : undefined}
+                    >
+                      {t(FIELD_LABEL_KEY[field])}
+                    </Menu.Item>
+                  ))}
+                </Menu.Dropdown>
+              </Menu>
+              <Menu.Divider />
+              <Menu.Item
+                leftSection={<IconGitMerge size={14} />}
+                onClick={() => setMergeOpen(true)}
+              >
+                {t("merge.title")}
+              </Menu.Item>
+              <Menu.Item
+                color="red"
+                leftSection={<IconTrash size={14} />}
+                onClick={() => void handleDelete()}
+              >
+                {t("common:actions.delete")}
+              </Menu.Item>
+            </Menu.Dropdown>
+          </Menu>
+        </Group>
+      </Group>
+
+      <Group align="flex-start" wrap="wrap" gap="lg">
         <Stack gap="xs" style={{ flex: "3 1 360px", minWidth: 280 }}>
           {showEmbedded ? (
             <PlaybackPanel
@@ -508,11 +705,11 @@ export function MetadataDetail({
             <div
               // 点封面看大图由容器承担, 不另铺一层铺满的透明按钮: 那层按钮会连同播放按钮一起
               // 接住点击, 层级顺序一变就退化成"点播放却打开大图". 播放按钮自己截断冒泡.
-              onClick={coverUrl ? () => coverLightbox.open() : undefined}
+              onClick={activeImage ? () => coverLightbox.open() : undefined}
               // 容器替下原来的透明按钮, 键盘入口要一并补回 (播放按钮仍是容器内的独立按钮).
-              role={coverUrl ? "button" : undefined}
-              tabIndex={coverUrl ? 0 : undefined}
-              aria-label={coverUrl ? item.number : undefined}
+              role={activeImage ? "button" : undefined}
+              tabIndex={activeImage ? 0 : undefined}
+              aria-label={activeImage ? item.number : undefined}
               onKeyDown={(event) => {
                 if (!coverUrl) return;
                 if (event.key !== "Enter" && event.key !== " ") return;
@@ -530,10 +727,10 @@ export function MetadataDetail({
                 ...(!coverUrl ? { aspectRatio: "16 / 9" as const } : {}),
               }}
             >
-              {coverUrl && (
+              {activeImage && (
                 <ProxyImage
-                  key={coverUrl}
-                  src={coverUrl}
+                  key={activeImage}
+                  src={activeImage}
                   alt={item.number}
                   referrerPolicy="no-referrer"
                   onError={handleCoverError}
@@ -543,7 +740,7 @@ export function MetadataDetail({
               )}
               <FilePhaseOverlay phase={item.file_phase} />
 
-              {coverUrl ? (
+              {activeImage ? (
                 coverPlayButton
               ) : (
                 <div
@@ -589,6 +786,52 @@ export function MetadataDetail({
             </div>
           )}
 
+          {galleryImageSrc.length > 1 && (
+            <Group
+              gap={4}
+              wrap="nowrap"
+              style={{ overflowX: "auto", overflowY: "hidden", paddingBottom: 2 }}
+            >
+              {galleryImageSrc.map((src, i) => (
+                <Box
+                  key={i}
+                  component="button"
+                  type="button"
+                  onClick={() => setActiveIdx(i)}
+                  aria-label={`${t("detail.fields.extrafanart")} ${i + 1}`}
+                  style={{
+                    padding: 0,
+                    border:
+                      activeIdx === i
+                        ? "2px solid var(--mantine-color-brand-5)"
+                        : "2px solid transparent",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                    background: "none",
+                    lineHeight: 0,
+                    flexShrink: 0,
+                  }}
+                >
+                  <ProxyImage
+                    src={src}
+                    alt={`thumb-${i}`}
+                    referrerPolicy="no-referrer"
+                    style={{
+                      width: 88,
+                      height: 60,
+                      objectFit: "cover",
+                      display: "block",
+                      borderRadius: 4,
+                    }}
+                    placeholder={
+                      <span style={{ width: 88, height: 60, display: "block" }} aria-hidden />
+                    }
+                  />
+                </Box>
+              ))}
+            </Group>
+          )}
+
           <Group gap="xs" wrap="wrap">
             <Tooltip label={t("detail.cropPoster.noThumb")} disabled={thumbSrc != null}>
               <Box display="inline-block">
@@ -610,324 +853,179 @@ export function MetadataDetail({
         </Stack>
 
         <Stack gap="sm" style={{ flex: "2 1 280px", minWidth: 260 }}>
-          <div>
-            <Group gap="sm" align="center" wrap="wrap">
-              <Title order={2} ff="monospace">
-                {item.number}
-              </Title>
-              {/* 收藏是「★收藏」标签的挂载关系, 不是独立列; 状态直接读详情的 user_tags. */}
-              <Button
-                size="compact-sm"
-                variant={isFavorite ? "light" : "default"}
-                color={isFavorite ? "yellow" : undefined}
-                loading={favoriteMutation.isPending}
-                aria-pressed={isFavorite}
-                leftSection={
-                  isFavorite ? <IconStar size={14} fill="currentColor" /> : <IconStar size={14} />
-                }
-                onClick={() => favoriteMutation.mutate({ metadataId: id, favorite: !isFavorite })}
-              >
-                {isFavorite ? t("favorite.remove") : t("favorite.add")}
-              </Button>
-            </Group>
-            {item.title && (
-              <Group gap={4} align="center" wrap="nowrap">
-                <Text c="dimmed">{item.title}</Text>
-                <LockToggle {...lockProps("title")} />
-              </Group>
-            )}
-          </div>
+          <Tabs defaultValue="movie">
+            <Tabs.List mb="sm">
+              <Tabs.Tab value="movie">{t("detail.tabs.movie")}</Tabs.Tab>
+              <Tabs.Tab value="video">{t("detail.tabs.video")}</Tabs.Tab>
+              <Tabs.Tab value="comments">{t("detail.tabs.comments")}</Tabs.Tab>
+            </Tabs.List>
+            <Tabs.Panel value="movie">
+              {item.title && (
+                <Group gap={4} align="center" wrap="nowrap" mb={4}>
+                  <Text c="dimmed">{item.title}</Text>
+                  <LockToggle {...lockProps("title")} />
+                </Group>
+              )}
 
-          <Group gap="lg" wrap="wrap">
-            {item.studio && (
-              <FieldBlock label={t("detail.fields.studio")} lock={lockProps("studio")}>
-                <FacetBadge kind="studio" id={data.studio_id} name={item.studio} />
-              </FieldBlock>
-            )}
-            {item.publisher && (
-              <FieldBlock label={t("detail.fields.publisher")} lock={lockProps("publisher")}>
-                <FacetBadge kind="publisher" id={data.publisher_id} name={item.publisher} />
-              </FieldBlock>
-            )}
-            {item.series && (
-              <FieldBlock label={t("detail.fields.series")} lock={lockProps("series")}>
-                <FacetBadge kind="series" id={data.series_id} name={item.series} />
-              </FieldBlock>
-            )}
-            {item.release && (
-              <FieldBlock label={t("detail.fields.release")} lock={lockProps("release")}>
-                <Text size="sm">{item.release}</Text>
-              </FieldBlock>
-            )}
-            {runtime && (
-              <FieldBlock label={t("detail.fields.runtime")} lock={lockProps("runtime")}>
-                <Text size="sm">{runtime}</Text>
-              </FieldBlock>
-            )}
-            {item.score != null && (
-              <FieldBlock label={t("detail.fields.score")} lock={lockProps("score")}>
-                <Badge color="yellow" variant="light" leftSection={<IconStar size={12} />}>
-                  {item.score.toFixed(1)}
-                </Badge>
-              </FieldBlock>
-            )}
-            {item.vr && (
-              <FieldBlock label={t("detail.fields.vr")}>
-                <VrBadge />
-              </FieldBlock>
-            )}
-          </Group>
-
-          {item.directors && item.directors.length > 0 && (
-            <FieldBlock label={t("detail.fields.directors")} lock={lockProps("directors")}>
-              <Group gap={6}>
-                {item.directors.map((d) => (
-                  <FacetBadge key={d} kind="director" id={data.director_ids?.[d]} name={d} />
-                ))}
-              </Group>
-            </FieldBlock>
-          )}
-
-          {item.actors && item.actors.length > 0 && (
-            <FieldBlock label={t("detail.fields.actors")} lock={lockProps("actors")}>
-              <Group gap={6}>
-                {item.actors.map((a) => (
-                  <FacetBadge
-                    key={a}
-                    kind="actor"
-                    id={data.actor_ids?.[a]}
-                    name={a}
-                    gender={data.actor_genders?.[a]}
-                  />
-                ))}
-              </Group>
-            </FieldBlock>
-          )}
-
-          {item.tags && item.tags.length > 0 && (
-            <FieldBlock label={t("detail.fields.tags")} lock={lockProps("tags")}>
-              <Group gap={6}>
-                {item.tags.map((tg) => (
-                  <FacetBadge key={tg} kind="tag" id={data.tag_ids?.[tg]} name={tg} />
-                ))}
-              </Group>
-            </FieldBlock>
-          )}
-
-          <FieldBlock label={t("detail.userTags")}>
-            <Group gap={6} align="center" wrap="wrap">
-              {(data.user_tags ?? []).map((tag) => (
-                <FacetBadge key={tag.id} kind="user_tag" id={tag.id} name={tag.name} />
-              ))}
-              <UserTagActions
-                attached={data.user_tags ?? []}
-                candidates={(userTagOptions?.items ?? []).filter(
-                  (tag) => !(data.user_tags ?? []).some((attached) => attached.id === tag.id),
+              <Group gap="lg" wrap="wrap">
+                {item.studio && (
+                  <FieldBlock label={t("detail.fields.studio")} lock={lockProps("studio")}>
+                    <FacetBadge kind="studio" id={data.studio_id} name={item.studio} />
+                  </FieldBlock>
                 )}
-                onChoose={(selection) => void handleAddTags(selection)}
-                onDetach={(ids) => void handleDetachTags(ids)}
-                disabled={ensureTagsMutation.isPending || applyTagsMutation.isPending}
-              />
-            </Group>
-          </FieldBlock>
-
-          {item.source_urls && Object.keys(item.source_urls).length > 0 && (
-            <FieldBlock label={t("detail.fields.sourceUrls")}>
-              <Group gap={6}>
-                {Object.entries(item.source_urls).flatMap(([site, raw]) => {
-                  if (typeof raw !== "string" || !/^https?:\/\//i.test(raw)) return [];
-                  return [
-                    <Badge
-                      key={site}
-                      component="a"
-                      href={raw}
-                      target="_blank"
-                      rel="noreferrer"
-                      variant="outline"
-                      color="gray"
-                      size="sm"
-                      rightSection={<IconExternalLink size={12} />}
-                      style={{
-                        cursor: "pointer",
-                        textTransform: "none",
-                        textDecoration: "none",
-                      }}
-                    >
-                      {site}
-                    </Badge>,
-                  ];
-                })}
+                {item.publisher && (
+                  <FieldBlock label={t("detail.fields.publisher")} lock={lockProps("publisher")}>
+                    <FacetBadge kind="publisher" id={data.publisher_id} name={item.publisher} />
+                  </FieldBlock>
+                )}
+                {item.series && (
+                  <FieldBlock label={t("detail.fields.series")} lock={lockProps("series")}>
+                    <FacetBadge kind="series" id={data.series_id} name={item.series} />
+                  </FieldBlock>
+                )}
+                {item.release && (
+                  <FieldBlock label={t("detail.fields.release")} lock={lockProps("release")}>
+                    <Text size="sm">{item.release}</Text>
+                  </FieldBlock>
+                )}
+                {runtime && (
+                  <FieldBlock label={t("detail.fields.runtime")} lock={lockProps("runtime")}>
+                    <Text size="sm">{runtime}</Text>
+                  </FieldBlock>
+                )}
+                {item.score != null && (
+                  <FieldBlock label={t("detail.fields.score")} lock={lockProps("score")}>
+                    <Badge color="yellow" variant="light" leftSection={<IconStar size={12} />}>
+                      {item.score.toFixed(1)}
+                    </Badge>
+                  </FieldBlock>
+                )}
+                {item.vr && (
+                  <FieldBlock label={t("detail.fields.vr")}>
+                    <VrBadge />
+                  </FieldBlock>
+                )}
               </Group>
-            </FieldBlock>
-          )}
 
-          {item.plot && (
-            <FieldBlock label={t("detail.fields.plot")} lock={lockProps("plot")}>
-              <Text size="sm" style={{ whiteSpace: "pre-line" }}>
-                {item.plot}
+              {item.directors && item.directors.length > 0 && (
+                <FieldBlock label={t("detail.fields.directors")} lock={lockProps("directors")}>
+                  <Group gap={6}>
+                    {item.directors.map((d) => (
+                      <FacetBadge key={d} kind="director" id={data.director_ids?.[d]} name={d} />
+                    ))}
+                  </Group>
+                </FieldBlock>
+              )}
+
+              {item.actors && item.actors.length > 0 && (
+                <FieldBlock label={t("detail.fields.actors")} lock={lockProps("actors")}>
+                  <Group gap={6}>
+                    {item.actors.map((a) => (
+                      <FacetBadge
+                        key={a}
+                        kind="actor"
+                        id={data.actor_ids?.[a]}
+                        name={a}
+                        gender={data.actor_genders?.[a]}
+                      />
+                    ))}
+                  </Group>
+                </FieldBlock>
+              )}
+
+              {item.tags && item.tags.length > 0 && (
+                <FieldBlock label={t("detail.fields.tags")} lock={lockProps("tags")}>
+                  <Group gap={6}>
+                    {item.tags.map((tg) => (
+                      <FacetBadge key={tg} kind="tag" id={data.tag_ids?.[tg]} name={tg} />
+                    ))}
+                  </Group>
+                </FieldBlock>
+              )}
+
+              <FieldBlock label={t("detail.userTags")}>
+                <Group gap={6} align="center" wrap="wrap">
+                  {(data.user_tags ?? []).map((tag) => (
+                    <FacetBadge key={tag.id} kind="user_tag" id={tag.id} name={tag.name} />
+                  ))}
+                  <UserTagActions
+                    attached={data.user_tags ?? []}
+                    candidates={(userTagOptions?.items ?? []).filter(
+                      (tag) => !(data.user_tags ?? []).some((attached) => attached.id === tag.id),
+                    )}
+                    onChoose={(selection) => void handleAddTags(selection)}
+                    onDetach={(ids) => void handleDetachTags(ids)}
+                    disabled={ensureTagsMutation.isPending || applyTagsMutation.isPending}
+                  />
+                </Group>
+              </FieldBlock>
+
+              {item.source_urls && Object.keys(item.source_urls).length > 0 && (
+                <FieldBlock label={t("detail.fields.sourceUrls")}>
+                  <Group gap={6}>
+                    {Object.entries(item.source_urls).flatMap(([site, raw]) => {
+                      if (typeof raw !== "string" || !/^https?:\/\//i.test(raw)) return [];
+                      return [
+                        <Badge
+                          key={site}
+                          component="a"
+                          href={raw}
+                          target="_blank"
+                          rel="noreferrer"
+                          variant="outline"
+                          color="gray"
+                          size="sm"
+                          rightSection={<IconExternalLink size={12} />}
+                          style={{
+                            cursor: "pointer",
+                            textTransform: "none",
+                            textDecoration: "none",
+                          }}
+                        >
+                          {site}
+                        </Badge>,
+                      ];
+                    })}
+                  </Group>
+                </FieldBlock>
+              )}
+
+              {item.plot && (
+                <FieldBlock label={t("detail.fields.plot")} lock={lockProps("plot")}>
+                  <Text size="sm" style={{ whiteSpace: "pre-line" }}>
+                    {item.plot}
+                  </Text>
+                </FieldBlock>
+              )}
+            </Tabs.Panel>
+            <Tabs.Panel value="video">
+              <Text size="xs" c="dimmed" mb="xs">
+                {t("detail.videoPending")}
               </Text>
-            </FieldBlock>
-          )}
-
-          {hasExtrafanart && (
-            <FieldBlock
-              label={`${t("detail.fields.extrafanart")} (${item.extrafanart?.length})`}
-              lock={lockProps("extrafanart")}
-            >
-              <FanartStrip images={item.extrafanart ?? []} />
-            </FieldBlock>
-          )}
-
-          <Group gap="xs" pt="xs">
-            <Menu shadow="md" position="bottom-start">
-              <Menu.Target>
-                <Button
-                  size="xs"
-                  variant="light"
-                  leftSection={<IconRefresh size={14} />}
-                  loading={scrapeMutation.isPending}
-                >
-                  {t("actions.scrape")}
-                </Button>
-              </Menu.Target>
-              <Menu.Dropdown>
-                <Menu.Item
-                  onClick={() =>
-                    scrapeMutation.mutate({ body: { type: "scrape", number: item.number } })
-                  }
-                >
-                  <Text size="sm">{t("common:actions.scrapeNormal")}</Text>
-                  <Text size="xs" c="dimmed">
-                    {t("common:actions.scrapeNormalDesc")}
-                  </Text>
-                </Menu.Item>
-                <Menu.Item
-                  onClick={() =>
-                    scrapeMutation.mutate({
-                      body: { type: "scrape", number: item.number, use_cache: [] },
-                    })
-                  }
-                >
-                  <Text size="sm">{t("common:actions.scrapeForce")}</Text>
-                  <Text size="xs" c="dimmed">
-                    {t("common:actions.scrapeForceDesc")}
-                  </Text>
-                </Menu.Item>
-              </Menu.Dropdown>
-            </Menu>
-            <Button
-              size="xs"
-              variant="light"
-              leftSection={<IconPencil size={14} />}
-              onClick={() => setEditOpen(true)}
-            >
-              {t("common:actions.edit")}
-            </Button>
-            <Menu shadow="md" position="bottom-start">
-              <Menu.Target>
-                <Button
-                  size="xs"
-                  variant="light"
-                  color={allLocked ? "yellow" : "gray"}
-                  leftSection={<IconLock size={14} />}
-                  loading={lockMutation.isPending}
-                >
-                  {t("lock.manage")}
-                </Button>
-              </Menu.Target>
-              <Menu.Dropdown>
-                <Menu.Item onClick={() => applyLocks(allLocked ? [] : LOCKABLE_FIELDS)}>
-                  {allLocked ? t("lock.clearAll") : t("lock.all")}
-                </Menu.Item>
-                <Menu.Divider />
-                {LOCKABLE_FIELDS.map((field) => (
-                  <Menu.Item
-                    key={field}
-                    onClick={() => toggleLock(field)}
-                    leftSection={
-                      lockedFields.has(field) ? <IconLock size={14} /> : <IconLockOpen size={14} />
-                    }
-                    rightSection={lockedFields.has(field) ? <IconCheck size={14} /> : undefined}
-                  >
-                    {t(FIELD_LABEL_KEY[field])}
-                  </Menu.Item>
+              <Stack gap={6}>
+                {VIDEO_INFO_FIELDS.map((label) => (
+                  <Group key={label} gap="sm" wrap="nowrap">
+                    <Text size="xs" c="dimmed" style={{ width: 96, flexShrink: 0 }}>
+                      {label}
+                    </Text>
+                    <Text size="sm" c="dimmed">
+                      —
+                    </Text>
+                  </Group>
                 ))}
-              </Menu.Dropdown>
-            </Menu>
-            <Button
-              size="xs"
-              variant="light"
-              color="grape"
-              leftSection={<IconGitMerge size={14} />}
-              onClick={() => setMergeOpen(true)}
-            >
-              {t("merge.title")}
-            </Button>
-            <Button
-              size="xs"
-              variant="light"
-              color="red"
-              leftSection={<IconTrash size={14} />}
-              loading={deleteMutation.isPending}
-              onClick={() => void handleDelete()}
-            >
-              {t("common:actions.delete")}
-            </Button>
-          </Group>
+              </Stack>
+            </Tabs.Panel>
+            <Tabs.Panel value="comments">
+              <CommentSection
+                metadataId={id}
+                comments={data.comments ?? []}
+                canSeek={canSeek}
+                onSeek={requestSeek}
+              />
+            </Tabs.Panel>
+          </Tabs>
         </Stack>
       </Group>
-
-      {/* 宽屏下并排, 窄屏落回上下叠放; 各自保持自然高度, 拉平会把空白挪进较短的一栏. */}
-      <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" style={{ alignItems: "start" }}>
-        <Card withBorder radius="md" p="md">
-          <Title order={5} mb="sm">
-            {t("detail.connections")}
-          </Title>
-          {data.files.length === 0 ? (
-            <Text size="sm" c="dimmed">
-              {t("detail.noFiles")}
-            </Text>
-          ) : (
-            <Stack gap={6}>
-              {data.files.map((f) => (
-                <Group key={f.id} justify="space-between" gap="xs" wrap="nowrap">
-                  <Stack gap={4} style={{ minWidth: 0, flex: 1 }}>
-                    <Text size="sm" truncate="end" ff="monospace">
-                      {f.path}
-                    </Text>
-                    <FilePhaseBadges phase={f} />
-                  </Stack>
-                  <Badge size="sm" variant="light">
-                    {f.status}
-                  </Badge>
-                  {/* 逐文件的删除只在媒体库详情页做: 这里只把人送过去, 并按该文件的路径过滤列表. */}
-                  <ActionIcon
-                    variant="subtle"
-                    size="sm"
-                    aria-label={t("detail.openInLibrary")}
-                    onClick={() =>
-                      void navigate({
-                        to: "/libraries/$libraryId",
-                        params: { libraryId: String(f.library_id) },
-                        search: { q: f.path },
-                      })
-                    }
-                  >
-                    <IconFolders size={16} />
-                  </ActionIcon>
-                </Group>
-              ))}
-            </Stack>
-          )}
-        </Card>
-
-        <CommentSection
-          metadataId={id}
-          comments={data.comments ?? []}
-          canSeek={canSeek}
-          onSeek={requestSeek}
-        />
-      </SimpleGrid>
 
       <Modal
         opened={editOpen}
@@ -981,8 +1079,12 @@ export function MetadataDetail({
         />
       )}
 
-      {coverLightboxOpen && coverSrc && (
-        <FanartLightbox images={[coverSrc]} onClose={coverLightbox.close} />
+      {coverLightboxOpen && galleryImageSrc.length > 0 && (
+        <FanartLightbox
+          images={galleryImageSrc}
+          initialIndex={Math.min(activeIdx, galleryImageSrc.length - 1)}
+          onClose={coverLightbox.close}
+        />
       )}
     </Stack>
   );

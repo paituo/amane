@@ -154,7 +154,15 @@
     "playbackCopyTimestamp": "复制时间戳",
     "playbackCopyLink": "复制当前时间的链接",
     "playbackCopied": "已复制到剪贴板",
-    "playbackCopyFailed": "复制失败"
+    "playbackCopyFailed": "复制失败",
+    "tabs": {
+      "movie": "影片信息",
+      "video": "视频信息",
+      "comments": "评论"
+    },
+    "more": "更多",
+    "lockManage": "锁定管理",
+    "videoPending": "媒体探测接口接入后将在此显示时长、编码、分辨率等信息"
   },
   "browse": {
     "title": "分类浏览",

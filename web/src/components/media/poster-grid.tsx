@@ -29,6 +29,7 @@ import { confirm } from "@/lib/confirm";
 import { blacklistTagQueryKey, ensureBlacklistTagId } from "@/lib/media/blacklist";
 import { ensureFavoriteTagId, favoriteTagQueryKey } from "@/lib/media/favorites";
 import { useGridColumns } from "@/lib/media/grid-columns";
+import { useLocalPlayer, useOpenLocalPlayback } from "@/lib/media/local-player";
 import { PosterCard } from "./poster-card";
 
 interface PosterGridProps {
@@ -68,6 +69,26 @@ export function PosterGrid({
 
   const { selected, selectedIds, toggleOne, clear } = useIdSelection();
   const [tagBusy, setTagBusy] = useState(false);
+
+  // 海报墙播放按钮: 外部播放器开着就直接拉起本机播放器, 否则弹出内嵌播放器页面直接播放.
+  const localPlayer = useLocalPlayer();
+  const openLocal = useOpenLocalPlayback();
+  function handlePlay(item: MetadataResponse) {
+    if (localPlayer.data?.enabled === true) {
+      openLocal.mutate(
+        { path: { metadata_id: item.id } },
+        {
+          onError: (err) =>
+            notifications.show({
+              message: extractErrorMessage(err, t("common:toast.operationFailed")),
+              color: "red",
+            }),
+        },
+      );
+    } else {
+      setPlayId(item.id);
+    }
+  }
 
   const batchScrape = useMutation({
     ...batchScrapeMetadataMutation(),
@@ -237,7 +258,7 @@ export function PosterGrid({
             actorBirthday={actorBirthday}
             selected={selected.has(item.id)}
             onToggleSelect={() => toggleOne(item.id)}
-            onPlay={() => setPlayId(item.id)}
+            onPlay={() => handlePlay(item)}
             onOpen={() => open(item.id)}
           />
         ))}
@@ -258,6 +279,7 @@ export function PosterGrid({
         {playId != null && (
           <PlaybackPanel
             metadataId={playId}
+            playNonce={1}
             seekRequest={null}
             onSeekHandled={() => {}}
             onCanSeekChange={() => {}}
