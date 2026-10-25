@@ -1203,6 +1203,13 @@ export type EverythingConfig = {
 };
 
 /**
+ * ExternalPlayerMode
+ *
+ * 外部播放器的两种取用方式.
+ */
+export type ExternalPlayerMode = 'system' | 'custom';
+
+/**
  * FacetBatchAction
  *
  * 分类批量动作; 两个动作都是整体赋值且幂等.
@@ -1822,6 +1829,7 @@ export type HotSettings = {
     llm?: LlmConfig;
     search?: SearchConfig;
     r18?: R18Config;
+    playback?: PlaybackConfig;
     watcher?: WatcherConfig;
     everything?: EverythingConfig;
     worker?: WorkerConfig;
@@ -3306,6 +3314,64 @@ export type PathTemplateSchemaResponse = {
      * Subtitle Extensions Default
      */
     subtitle_extensions_default: Array<string>;
+};
+
+/**
+ * PlaybackConfig
+ *
+ * 播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流).
+ */
+export type PlaybackConfig = {
+    /**
+     * External
+     */
+    external?: boolean;
+    /**
+     * `system` 用系统默认关联程序; `custom` 用 `player` 指定的程序.
+     */
+    mode?: ExternalPlayerMode;
+    /**
+     * Player
+     *
+     * 自定义播放器的可执行文件 (如 vlc.exe). 仅 mode=custom 使用; 空表示不可用.
+     */
+    player?: string;
+};
+
+/**
+ * PlaybackLocalOpenResponse
+ *
+ * 拉起结果: 打开了哪些文件, 交给了哪个程序.
+ */
+export type PlaybackLocalOpenResponse = {
+    /**
+     * Paths
+     */
+    paths: Array<string>;
+    /**
+     * Player
+     */
+    player?: string | null;
+};
+
+/**
+ * PlaybackLocalPlayerResponse
+ *
+ * 本机播放的当前设置. 前端据此决定封面按钮与播放卡片的行为, 不含任何文件信息.
+ */
+export type PlaybackLocalPlayerResponse = {
+    /**
+     * Enabled
+     */
+    enabled: boolean;
+    /**
+     * Mode
+     */
+    mode: 'system' | 'custom';
+    /**
+     * Player
+     */
+    player?: string | null;
 };
 
 /**
@@ -6327,6 +6393,57 @@ export type ListPlaybackSourcesResponses = {
 };
 
 export type ListPlaybackSourcesResponse = ListPlaybackSourcesResponses[keyof ListPlaybackSourcesResponses];
+
+export type GetLocalPlayerData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/api/playback/local-player';
+};
+
+export type GetLocalPlayerResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlaybackLocalPlayerResponse;
+};
+
+export type GetLocalPlayerResponse = GetLocalPlayerResponses[keyof GetLocalPlayerResponses];
+
+export type OpenLocalPlaybackData = {
+    body?: never;
+    path: {
+        /**
+         * Metadata Id
+         */
+        metadata_id: number;
+    };
+    query?: {
+        /**
+         * File Id
+         */
+        file_id?: number | null;
+    };
+    url: '/api/playback/{metadata_id}/open-local';
+};
+
+export type OpenLocalPlaybackErrors = {
+    /**
+     * Validation Error
+     */
+    422: HttpValidationError;
+};
+
+export type OpenLocalPlaybackError = OpenLocalPlaybackErrors[keyof OpenLocalPlaybackErrors];
+
+export type OpenLocalPlaybackResponses = {
+    /**
+     * Successful Response
+     */
+    200: PlaybackLocalOpenResponse;
+};
+
+export type OpenLocalPlaybackResponse = OpenLocalPlaybackResponses[keyof OpenLocalPlaybackResponses];
 
 export type ListPlaybackStreamsData = {
     body?: never;

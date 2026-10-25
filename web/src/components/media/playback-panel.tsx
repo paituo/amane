@@ -13,7 +13,8 @@ import {
   Stack,
   Text,
 } from "@mantine/core";
-import { IconChevronDown, IconRefresh } from "@tabler/icons-react";
+import { notifications } from "@mantine/notifications";
+import { IconChevronDown, IconPlayerPlay, IconRefresh } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
 import { Suspense, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
@@ -33,6 +34,11 @@ import type { HlsFailure, SeekRequest } from "@/components/media/playback-player
 import { LazyPlaybackPlayer } from "@/components/media/playback-player-lazy";
 import { extractErrorMessage } from "@/lib/api-error";
 import { apiFetch } from "@/lib/api-token";
+import {
+  canLaunchLocalPlayer,
+  useLocalPlayer,
+  useOpenLocalPlayback,
+} from "@/lib/media/local-player";
 import { orderPlaybackSources } from "@/lib/media/source-order";
 import { useUIStore } from "@/stores/ui";
 
@@ -295,11 +301,14 @@ function PlayerMessage({
 
 export function PlaybackPanel({
   metadataId,
+  playNonce = 0,
   seekRequest,
   onSeekHandled,
   onCanSeekChange,
 }: {
   metadataId: number;
+  /** 封面按钮发出的播放请求; 每变一次就把面板滚动到视野内并开始播放. */
+  playNonce?: number;
   /** 评论时间戳的跳转请求; 为空表示没有待处理的跳转. */
   seekRequest: SeekRequest | null;
   /** 播放器已经按请求定位之后回调, 由调用方清除请求. */
@@ -308,10 +317,14 @@ export function PlaybackPanel({
   onCanSeekChange: (canSeek: boolean) => void;
 }) {
   const { t } = useTranslation("metadata");
+  // 外部播放器开着时不使用内置播放器, 来源与码流都不必探测.
+  const local = useLocalPlayer();
+  const external = local.data?.enabled === true;
+  const openLocal = useOpenLocalPlayback();
   // 来源列表不调用插件, 因此打开面板即可渲染; 探测推迟到用户切换到某个来源时执行.
   const sourcesQuery = useQuery({
     ...listPlaybackSourcesOptions(),
-    enabled: metadataId > 0,
+    enabled: metadataId > 0 && !external,
   });
   // 后端按来源 ID 返回; 用户顺序在插件页维护, 位置 0 的来源即本面板默认探测的来源.
   const sourceOrder = useUIStore((state) => state.playbackSourceOrder);
@@ -333,7 +346,7 @@ export function PlaybackPanel({
     ...listPlaybackStreamsOptions({
       path: { source_id: source?.source_id ?? "", metadata_id: metadataId },
     }),
-    enabled: metadataId > 0 && source != null,
+    enabled: metadataId > 0 && source != null && !external,
   });
   const streams = streamsQuery.data?.items ?? EMPTY_STREAMS;
   // 流的选择连同所属来源一并记录: 切换来源后 key 不属于新来源, 选择回到该来源的默认值,
@@ -406,11 +419,95 @@ export function PlaybackPanel({
     frame.scrollIntoView({ behavior: "smooth", block: "start" });
   }, [seekRequest, selected]);
 
+  // 封面上那个大按钮的请求: 面板通常已在视野下方, 先滚过去. 起播由 `autoPlay` 直接按请求计数推导,
+  // 不必再抄一份状态 (流列表还在探测时播放器尚未挂载, 它挂载的那一次就会带着 autoPlay).
+  useEffect(() => {
+    if (playNonce <= 0) {
+      return;
+    }
+    playerFrameRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [playNonce]);
+
   const title = (
     <Text size="sm" fw={600}>
       {t("detail.playback")}
     </Text>
   );
+
+  const launchExternal = () => {
+    openLocal.mutate(
+      { path: { metadata_id: metadataId } },
+      {
+        onSuccess: (result) => {
+          notifications.show({
+            message: t("detail.openLocalDone", {
+              player: result.player ?? t("detail.openLocalSystem"),
+            }),
+            color: "blue",
+          });
+        },
+        onError: (failure) => {
+          notifications.show({
+            message: extractErrorMessage(failure, t("detail.openLocalFailed")),
+            color: "red",
+          });
+        },
+      },
+    );
+  };
+
+  // 外部播放: 不使用内置播放器, 因此没有来源与码流可选, 卡片里只剩"交给播放器"这一个入口.
+  if (external) {
+    const playerName = local.data?.mode === "custom" ? (local.data?.player ?? null) : null;
+    const launchable = canLaunchLocalPlayer(local.data);
+    return (
+      <Card
+        withBorder
+        radius="md"
+        p="md"
+        w="100%"
+        mx="auto"
+        style={{ maxWidth: PLAYBACK_CARD_MAX_WIDTH }}
+      >
+        <Stack gap="xs">
+          <Group justify="space-between" align="flex-end" wrap="wrap">
+            {title}
+            <Text size="xs" c="dimmed">
+              {playerName ?? t("detail.openLocalSystem")}
+            </Text>
+          </Group>
+          <PlayerFrame frameRef={playerFrameRef}>
+            <Center h="100%" p="md">
+              {launchable ? (
+                <Stack align="center" gap="sm">
+                  <ActionIcon
+                    size={64}
+                    radius="xl"
+                    variant="filled"
+                    color="dark"
+                    aria-label={t("detail.play")}
+                    loading={openLocal.isPending}
+                    onClick={launchExternal}
+                  >
+                    <IconPlayerPlay size={30} />
+                  </ActionIcon>
+                  <Text size="sm" c="dimmed" ta="center">
+                    {t("detail.localPlayerHint", {
+                      player: playerName ?? t("detail.openLocalSystem"),
+                    })}
+                  </Text>
+                </Stack>
+              ) : (
+                <Alert color="orange" variant="light" maw={520}>
+                  <Text size="sm">{t("detail.openLocalNoPlayer")}</Text>
+                </Alert>
+              )}
+            </Center>
+          </PlayerFrame>
+        </Stack>
+      </Card>
+    );
+  }
   if (sourceError != null) {
     return (
       <Card withBorder radius="md" p="md">
@@ -423,9 +520,26 @@ export function PlaybackPanel({
       </Card>
     );
   }
-  // 来源列表为空表示没有已启用的播放源, 此时无法选择来源, 整块不渲染.
+  // 来源列表为空表示没有已启用的播放源, 且外部播放器没开: 这时页面内确实没法播, 直接说明原因.
+  // 不再整块隐藏 — 封面上的播放按钮还指着这里, 隐藏之后点它就没有任何反馈.
   if (source == null) {
-    return null;
+    return (
+      <Card
+        withBorder
+        radius="md"
+        p="md"
+        w="100%"
+        mx="auto"
+        style={{ maxWidth: PLAYBACK_CARD_MAX_WIDTH }}
+      >
+        <Stack gap="xs">
+          {title}
+          <PlayerFrame frameRef={playerFrameRef}>
+            <PlayerMessage tone="neutral">{t("detail.localPlayerNone")}</PlayerMessage>
+          </PlayerFrame>
+        </Stack>
+      </Card>
+    );
   }
 
   // 当前来源的流正在探测: 使用与控件等宽的占位, 避免控件出现时行高跳动.
@@ -494,11 +608,12 @@ export function PlaybackPanel({
           ) : (
             <Suspense fallback={<Skeleton height="100%" />}>
               <LazyPlaybackPlayer
-                // 地址不变时 hls.js 不会重新装载, 重试必须更换 key 才会重新挂载.
-                key={`${selected.href}#${reloadNonce}`}
+                // 地址不变时 hls.js 不会重新装载, 重试与"再播一次"都必须更换 key 才会重新挂载.
+                key={`${selected.href}#${reloadNonce}#${playNonce}`}
                 href={selected.href}
                 kind={kind}
                 seekable={selected.seekable}
+                autoPlay={playNonce > 0}
                 tracks={selected.subtitles ?? []}
                 seek={
                   seekRequest == null

@@ -9,6 +9,8 @@ from urllib.parse import urlparse
 
 import pytest
 
+from amane.api.models.playback import PlaybackLocalOpenResponse
+from amane.config.manager import ExternalPlayerMode
 from amane.playback.factory import SOURCE_ID_MAX_LEN
 from tests.helpers import HTTP_STUB_POLL_INTERVAL
 from tests.plugins.test_plugin_system import playback_plugin_source, write_plugin
@@ -1388,3 +1390,192 @@ class TestResolveCache:
             assert _resolve_count(app) == 2
         finally:
             server.shutdown()
+
+
+class _Launcher:
+    """记录拉起参数, 不真的启动播放器."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[list[Path], str]] = []
+
+    async def __call__(self, paths: list[Path], *, player: str = "") -> PlaybackLocalOpenResponse:
+        self.calls.append((list(paths), player))
+        return PlaybackLocalOpenResponse(paths=[str(item) for item in paths], player=None)
+
+
+def _broken_hooks(monkeypatch: pytest.MonkeyPatch) -> _Launcher:
+    launcher = _Launcher()
+    monkeypatch.setattr("amane.api.routes.playback.launch_local_player", launcher)
+    return launcher
+
+
+def _set_playback(app: FastAPI, **patch: object) -> None:
+    playback = app.state.runtime.config.hot.playback
+    for key, value in patch.items():
+        setattr(playback, key, value)
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_local_player_defaults_to_builtin(client: AsyncClient) -> None:
+    """默认关闭外部播放: 前端据此继续用内置播放器."""
+    response = await client.get("playback/local-player")
+    assert response.status_code == 200
+    assert response.json() == {"enabled": False, "mode": "system", "player": None}
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_needs_the_switch(
+    client: AsyncClient,
+    repo: Repository,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """没开外部播放时接口拒绝, 且不会去碰任何文件."""
+    launcher = _broken_hooks(monkeypatch)
+    metadata_id = await _seed_title(repo, number="PLAY-LOCAL-OFF")
+    await _attach_file(repo, metadata_id, safe_path / "PLAY-LOCAL-OFF.mp4", payload=b"X")
+
+    response = await client.post(f"playback/{metadata_id}/open-local")
+    assert response.status_code == 403
+    assert launcher.calls == []
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_system_mode_takes_one_file(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """系统关联只能带一个路径: 取体积最大的那个, 其余文件不传."""
+    launcher = _broken_hooks(monkeypatch)
+    town = await _seed_title(repo, number="PLAY-LOCAL-SYS")
+    small = await _attach_file(repo, town, safe_path / "PLAY-LOCAL-SYS-cd1.mp4", payload=b"1")
+    big = await _attach_file(repo, town, safe_path / "PLAY-LOCAL-SYS-cd2.mp4", payload=b"2" * 64)
+    _set_playback(app, external=True, mode=ExternalPlayerMode.SYSTEM)
+
+    response = await client.post(f"playback/{town}/open-local")
+    assert response.status_code == 200, response.text
+    paths, player = launcher.calls[0]
+    assert player == ""
+    assert [item.name for item in paths] == ["PLAY-LOCAL-SYS-cd2.mp4"]
+    assert response.json()["paths"] == [str((safe_path / "PLAY-LOCAL-SYS-cd2.mp4").resolve())]
+    assert small != big
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_system_mode_ignores_a_leftover_player(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """切回系统关联后, 配置里残留的自定义播放器不能再被用上.
+
+    回归: 端点曾无条件透传 `playback.player`, 于是 `mode=system` 实际仍在跑自定义播放器;
+    残留路径失效时还会直接报错, 而不是回退到关联程序.
+    """
+    launcher = _broken_hooks(monkeypatch)
+    town = await _seed_title(repo, number="PLAY-LOCAL-SYS-STALE")
+    await _attach_file(repo, town, safe_path / "PLAY-LOCAL-SYS-STALE.mp4", payload=b"x")
+    _set_playback(
+        app,
+        external=True,
+        mode=ExternalPlayerMode.SYSTEM,
+        player=str(safe_path / "vlc.exe"),
+    )
+
+    response = await client.post(f"playback/{town}/open-local")
+    assert response.status_code == 200, response.text
+    _, player = launcher.calls[0]
+    assert player == ""
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_custom_mode_passes_every_video(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """指定了播放器时把全部视频按"主文件在前"交给它, 非视频文件不参与."""
+    launcher = _broken_hooks(monkeypatch)
+    player = safe_path / "vlc.exe"
+    player.write_bytes(b"MZ")
+    metadata_id = await _seed_title(repo, number="PLAY-LOCAL-CUSTOM")
+    await _attach_file(repo, metadata_id, safe_path / "cover.jpg", payload=b"JPG")
+    await _attach_file(repo, metadata_id, safe_path / "PLAY-LOCAL-CUSTOM-cd1.mkv", payload=b"1")
+    await _attach_file(repo, metadata_id, safe_path / "PLAY-LOCAL-CUSTOM-cd2.mkv", payload=b"2" * 32)
+    _set_playback(app, external=True, mode=ExternalPlayerMode.CUSTOM, player=str(player))
+
+    response = await client.post(f"playback/{metadata_id}/open-local")
+    assert response.status_code == 200, response.text
+    paths, configured = launcher.calls[0]
+    assert configured == str(player)
+    # 主文件 (体积最大的 cd2) 在最前, 其余按入库顺序跟随; 封面图不入列.
+    assert [item.name for item in paths] == [
+        "PLAY-LOCAL-CUSTOM-cd2.mkv",
+        "PLAY-LOCAL-CUSTOM-cd1.mkv",
+    ]
+
+    status = (await client.get("playback/local-player")).json()
+    assert status == {"enabled": True, "mode": "custom", "player": "vlc.exe"}
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_rejects_bad_targets(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """四种拒绝: 未配置播放器、条目不存在、没有视频、文件已不在磁盘上."""
+    launcher = _broken_hooks(monkeypatch)
+    _set_playback(app, external=True, mode=ExternalPlayerMode.CUSTOM, player="")
+    metadata_id = await _seed_title(repo, number="PLAY-LOCAL-BAD")
+    await _attach_file(repo, metadata_id, safe_path / "PLAY-LOCAL-BAD.mp4", payload=b"X")
+
+    unconfigured = await client.post(f"playback/{metadata_id}/open-local")
+    assert unconfigured.status_code == 400
+    assert "播放器" in unconfigured.json()["detail"]
+
+    _set_playback(app, mode=ExternalPlayerMode.SYSTEM)
+    assert (await client.post("playback/999999/open-local")).status_code == 404
+
+    empty_id = await _seed_title(repo, number="PLAY-LOCAL-EMPTY")
+    assert (await client.post(f"playback/{empty_id}/open-local")).status_code == 404
+
+    gone = safe_path / "gone.mp4"
+    await _attach_file(repo, metadata_id, gone, payload=b"X")
+    gone.unlink()
+    # 唯一还在磁盘上的那条也删掉: 少一条只是退让到别的一条, 全都不在才算失败.
+    (safe_path / "PLAY-LOCAL-BAD.mp4").unlink()
+    missing = await client.post(f"playback/{metadata_id}/open-local")
+    assert missing.status_code == 404
+    assert "PLAY-LOCAL-BAD.mp4" in missing.json()["detail"]
+    assert launcher.calls == []
+
+
+@pytest.mark.asyncio(loop_scope="function")
+async def test_open_local_rejects_foreign_file_id(
+    client: AsyncClient,
+    repo: Repository,
+    app: FastAPI,
+    safe_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """file_id 必须属于该条目: 拿别的条目的记录来打开会被拒."""
+    launcher = _broken_hooks(monkeypatch)
+    _set_playback(app, external=True, mode=ExternalPlayerMode.SYSTEM)
+    owner = await _seed_title(repo, number="PLAY-LOCAL-OWNER")
+    other = await _seed_title(repo, number="PLAY-LOCAL-OTHER")
+    await _attach_file(repo, owner, safe_path / "owner.mp4", payload=b"A")
+    foreign = await _attach_file(repo, other, safe_path / "other.mp4", payload=b"B")
+
+    response = await client.post(f"playback/{owner}/open-local", params={"file_id": foreign})
+    assert response.status_code == 400
+    assert launcher.calls == []

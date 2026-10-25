@@ -1776,6 +1776,89 @@
         }
       }
     },
+    "/api/playback/local-player": {
+      "get": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Get Local Player",
+        "description": "本机播放的当前设置. 不读库, 打开详情页即可调用.",
+        "operationId": "get_local_player",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackLocalPlayerResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/playback/{metadata_id}/open-local": {
+      "post": {
+        "tags": [
+          "playback"
+        ],
+        "summary": "Open Local Playback",
+        "description": "用本机外部播放器打开条目的文件.\n\n路径只取自条目索引, 不接受任意地址: 这个动作会在服务所在机器上执行程序, 收窄到\"已入库的文件 +\n已配置的播放器\"之后, 能触发的范围才是有界的.",
+        "operationId": "open_local_playback",
+        "parameters": [
+          {
+            "name": "metadata_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "title": "Metadata Id"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "File Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlaybackLocalOpenResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/playback/{source_id}/{metadata_id}/streams": {
       "get": {
         "tags": [
@@ -8415,6 +8498,15 @@
         "title": "EverythingConfig",
         "description": "Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级."
       },
+      "ExternalPlayerMode": {
+        "type": "string",
+        "enum": [
+          "system",
+          "custom"
+        ],
+        "title": "ExternalPlayerMode",
+        "description": "外部播放器的两种取用方式."
+      },
       "FacetBatchAction": {
         "type": "string",
         "enum": [
@@ -9984,6 +10076,14 @@
               "read_password": "r18dev_readonly",
               "read_timeout": 30,
               "psql_path": "psql"
+            }
+          },
+          "playback": {
+            "$ref": "#/components/schemas/PlaybackConfig",
+            "default": {
+              "external": false,
+              "mode": "system",
+              "player": ""
             }
           },
           "watcher": {
@@ -12893,6 +12993,96 @@
         ],
         "title": "PathTemplateSchemaResponse",
         "description": "与 resolve_paths 同源."
+      },
+      "PlaybackConfig": {
+        "properties": {
+          "external": {
+            "type": "boolean",
+            "title": "External",
+            "default": false
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ExternalPlayerMode",
+            "description": "`system` 用系统默认关联程序; `custom` 用 `player` 指定的程序.",
+            "default": "system",
+            "x-widget": "RadioRows"
+          },
+          "player": {
+            "type": "string",
+            "title": "Player",
+            "description": "自定义播放器的可执行文件 (如 vlc.exe). 仅 mode=custom 使用; 空表示不可用.",
+            "default": "",
+            "x-path-type": "file",
+            "x-widget": "PathPicker"
+          }
+        },
+        "type": "object",
+        "title": "PlaybackConfig",
+        "description": "播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流)."
+      },
+      "PlaybackLocalOpenResponse": {
+        "properties": {
+          "paths": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "player": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "paths"
+        ],
+        "title": "PlaybackLocalOpenResponse",
+        "description": "拉起结果: 打开了哪些文件, 交给了哪个程序."
+      },
+      "PlaybackLocalPlayerResponse": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "system",
+              "custom"
+            ],
+            "title": "Mode"
+          },
+          "player": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Player"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "enabled",
+          "mode"
+        ],
+        "title": "PlaybackLocalPlayerResponse",
+        "description": "本机播放的当前设置. 前端据此决定封面按钮与播放卡片的行为, 不含任何文件信息."
       },
       "PlaybackSourceListResponse": {
         "properties": {

@@ -7,13 +7,13 @@
     "network": "Network",
     "worker": "Task Engine",
     "watcher": "File Monitoring",
-    "everything": "Everything",
+    "everything": "Everything Index",
     "logging": "Logging",
     "sr": "Super Resolution",
     "llm": "LLM Translation",
     "watermark": "Watermark",
     "search": "Search",
-    "everything": "Everything Index"
+    "playback": "Player"
   },
   "config": {
     "loadError": "Failed to load configuration"
@@ -1031,6 +1031,28 @@
       "config": {
         "label": "Plugin configuration",
         "description": "Configuration fields provided by the plugin"
+      }
+    },
+    "playback": {
+      "external": {
+        "label": "Use an external player",
+        "description": "Playback opens the file with the system default or a custom player instead of the built-in one"
+      },
+      "mode": {
+        "label": "Player source",
+        "description": "Which program opens the media file",
+        "options": {
+          "system": "Use the system player",
+          "custom": "Custom player path"
+        },
+        "hints": {
+          "system": "Hand the file to the program associated with it in the OS",
+          "custom": "Launch a specific player executable"
+        }
+      },
+      "player": {
+        "label": "Custom player path",
+        "description": "Full path of the player executable (e.g. VLC's vlc.exe). Only used when the custom player is selected"
       }
     }
   }

@@ -14,9 +14,17 @@ import {
   type MantineBreakpoint,
 } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
-import { IconDots, IconRefresh, IconStar, IconTag, IconTrash } from "@tabler/icons-react";
+import {
+  IconDots,
+  IconInfoCircle,
+  IconRefresh,
+  IconStar,
+  IconTag,
+  IconTrash,
+} from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
+import type { MouseEvent } from "react";
 import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -31,6 +39,7 @@ import {
 import type { MetadataResponse, MetadataSortField, SortOrder } from "@/client/types.gen";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { ListToolbar } from "@/components/common/list-toolbar";
+import { MetadataViewer } from "@/components/media/metadata-viewer";
 import { SortableTh } from "@/components/common/sortable-th";
 import { SelectionBar } from "@/components/common/selection-bar";
 import { useIdSelection } from "@/hooks/use-id-selection";
@@ -150,6 +159,8 @@ export function MetaTable({
   const { selected, selectedIds, toggleOne, toggleAll, isAllSelected, clear } = useIdSelection();
   const [tagModalOpen, setTagModalOpen] = useState(false);
   const [tagIds, setTagIds] = useState<string[]>([]);
+  // 就地详情: 与海报墙同一套弹窗, 可翻阅的序列只有当前这一页 (列表是分页, 没有下一页可接).
+  const [openId, setOpenId] = useState<number | null>(null);
 
   const { data: userTags } = useQuery(listFacetsOptions(USER_TAG_FACET_LIST));
   const favoriteIds = useFavoriteIds();
@@ -213,6 +224,24 @@ export function MetaTable({
     });
     if (!ok) return;
     batchDelete.mutate({ body: { ids: selectedIds } });
+  }
+
+  /**
+   * 点行 (含行里的番号链接) 打开就地详情, 与海报卡片同语义: 修饰键与中键沿用浏览器的新标签行为,
+   * 那种方式打开的仍是详情页面.
+   *
+   * 行内的控件 (复选框与动作按钮) 由控件自己处理, 行不接管.
+   * 复制番号与标题不必另行让开: 拖选不产生 click, 能走到这里的都是单击.
+   */
+  function openRow(event: MouseEvent<HTMLTableRowElement>, id: number) {
+    if (event.button !== 0) return;
+    if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    const target = event.target;
+    if (target instanceof HTMLElement && target.closest("input, button, [role='menu']") != null) {
+      return;
+    }
+    event.preventDefault();
+    setOpenId(id);
   }
 
   async function handleDeleteOne(metadataId: number) {
@@ -349,6 +378,8 @@ export function MetaTable({
               <Table.Tr
                 key={item.id}
                 bg={selected.has(item.id) ? "var(--mantine-color-blue-light)" : undefined}
+                style={{ cursor: "pointer" }}
+                onClick={(event) => openRow(event, item.id)}
               >
                 <Table.Td>
                   <Checkbox checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} />
@@ -367,6 +398,21 @@ export function MetaTable({
                           <Link
                             to="/meta/$metadataId"
                             params={{ metadataId: String(item.id) }}
+                            // 拦截必须挂在链接自身: 行上的处理器晚于 Link 的导航判断, 那时地址已经改了.
+                            // 修饰键与中键不拦截, 沿用浏览器的新标签行为.
+                            onClick={(event) => {
+                              if (
+                                event.metaKey ||
+                                event.ctrlKey ||
+                                event.shiftKey ||
+                                event.altKey
+                              ) {
+                                return;
+                              }
+                              if (event.button !== 0) return;
+                              event.preventDefault();
+                              setOpenId(item.id);
+                            }}
                             style={{
                               textDecoration: "none",
                               minWidth: 0,
@@ -398,6 +444,13 @@ export function MetaTable({
                 <Table.Td>
                   {/* 窄屏动作列只容得下一个按钮, 其余动作移入菜单. */}
                   <Group gap={4} justify="flex-end" wrap="nowrap" visibleFrom="sm">
+                    <HintedActionIcon
+                      variant="subtle"
+                      label={t("card.detail")}
+                      onClick={() => setOpenId(item.id)}
+                    >
+                      <IconInfoCircle size={16} />
+                    </HintedActionIcon>
                     <HintedActionIcon
                       variant="subtle"
                       color={favoriteIds.has(item.id) ? "yellow" : "gray"}
@@ -444,6 +497,12 @@ export function MetaTable({
                       </Menu.Target>
                       <Menu.Dropdown>
                         <Menu.Item
+                          leftSection={<IconInfoCircle size={14} />}
+                          onClick={() => setOpenId(item.id)}
+                        >
+                          {t("card.detail")}
+                        </Menu.Item>
+                        <Menu.Item
                           leftSection={<IconStar size={14} />}
                           onClick={() =>
                             favoriteMutation.mutate({
@@ -484,6 +543,8 @@ export function MetaTable({
           </Text>
         )}
       </ListToolbar>
+
+      <MetadataViewer items={items} openId={openId} onOpenIdChange={setOpenId} />
 
       <Modal
         opened={tagModalOpen}

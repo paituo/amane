@@ -57,7 +57,7 @@
 
 **列数**: 海报墙与头像墙的列数取 `lib/media/grid-columns.ts` 的断点表与 ui store 的 `gridColumns` 中的较小者 — 用户偏好是 3–7 的上限, 窄屏仍收在断点以内. 入口是 `GridColumnsSlider`, 各处网格共用同一份偏好, 断点表只有上面那一个副本. 滑块每次档位变化即写入持久化存储 (档位共 5 个, 写入次数有界), 不采用列宽拖到松手才保存的做法.
 
-**就地查看**: 点击海报不导航, 由 `PosterGrid` 内的 `MetadataViewer` 原地打开居中弹窗; 两侧箭头与左右方向键翻阅宿主已加载的那段序列, 抵达两端即停住 (不环绕), 接近末尾时经 `onFetchMore` 追加下一页. 详情主体两处同源 (`components/media/metadata-detail.tsx`), 详情路由只负责写地址栏的评论跳转秒数, 因此 `embedded` / `onDeleted` / `onSeekCommit` 三个 props 决定了差别 — 不得为弹窗另写一份渲染.
+**就地查看**: 点击海报或列表行不导航, 由 `PosterGrid` / `MetaTable` 内的 `MetadataViewer` 原地打开居中弹窗; 两侧箭头与左右方向键翻阅宿主已加载的那段序列, 抵达两端即停住 (不环绕), 海报墙接近末尾时经 `onFetchMore` 追加下一页, 列表是分页因而序列止于当前页. 列表行内的控件与已有文本选区不接管点击 — 复制番号/标题时不该弹出详情. 详情主体两处同源 (`components/media/metadata-detail.tsx`), 详情路由只负责写地址栏的评论跳转秒数, 因此 `embedded` / `onDeleted` / `onSeekCommit` 三个 props 决定了差别 — 不得为弹窗另写一份渲染.
 
 **海报卡片**: `poster-card.tsx` 海报铺满整卡, 番号/标题/年份经底部渐变遮罩叠在图上 (样式见 `poster-card.module.css`); 悬停浮现播放 / 详情 / 收藏 / 黑名单四个动作与左上角复选框, 覆盖层交互一律阻断链接导航. 播放弹窗由 `PosterGrid` 统一渲染 `PlaybackPanel`, 卡片只上报 id.
 

@@ -936,6 +936,35 @@ class ActorScrapingConfig(BaseModel):
         return assert_sites_allowed(v, frozenset(ACTOR_IMAGE_SITES), field="image_sites")
 
 
+class ExternalPlayerMode(StrEnum):
+    """外部播放器的两种取用方式."""
+
+    SYSTEM = "system"
+    """交给操作系统默认关联程序 (Windows `startfile` / macOS `open` / Linux `xdg-open`)."""
+
+    CUSTOM = "custom"
+    """使用 `playback.player` 指定的可执行文件, 因此可以带命令行参数与多个文件."""
+
+
+class PlaybackConfig(BaseModel):
+    """播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流)."""
+
+    external: bool = False
+    """开启后播放改为调用外部播放器打开文件, 不使用内置播放器."""
+
+    mode: ExternalPlayerMode = Field(
+        default=ExternalPlayerMode.SYSTEM,
+        json_schema_extra={"x-widget": "RadioRows"},
+        description="`system` 用系统默认关联程序; `custom` 用 `player` 指定的程序.",
+    )
+
+    player: str = Field(
+        default="",
+        json_schema_extra={"x-widget": "PathPicker", "x-path-type": "file"},
+        description="自定义播放器的可执行文件 (如 vlc.exe). 仅 mode=custom 使用; 空表示不可用.",
+    )
+
+
 class HotSettings(BaseModel):
     """运行时可更新, 持久化到 TOML. extra=forbid, 未知字段须校验失败."""
 
@@ -992,6 +1021,7 @@ class HotSettings(BaseModel):
     llm: LLMConfig = LLMConfig()
     search: SearchConfig = SearchConfig()
     r18: R18Config = R18Config()
+    playback: PlaybackConfig = PlaybackConfig()
     watcher: WatcherConfig = WatcherConfig()
     everything: EverythingConfig = EverythingConfig()
     worker: WorkerConfig = WorkerConfig()

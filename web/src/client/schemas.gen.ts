@@ -2032,6 +2032,16 @@ export const EverythingConfigSchema = {
     description: 'Everything 库来源. 仅 Windows 生效; 其余平台启用后按来源不可用降级.'
 } as const;
 
+export const ExternalPlayerModeSchema = {
+    type: 'string',
+    enum: [
+        'system',
+        'custom'
+    ],
+    title: 'ExternalPlayerMode',
+    description: '外部播放器的两种取用方式.'
+} as const;
+
 export const FacetBatchActionSchema = {
     type: 'string',
     enum: [
@@ -3631,6 +3641,14 @@ export const HotSettingsSchema = {
                 read_password: 'r18dev_readonly',
                 read_timeout: 30,
                 psql_path: 'psql'
+            }
+        },
+        playback: {
+            $ref: '#/components/schemas/PlaybackConfig',
+            default: {
+                external: false,
+                mode: 'system',
+                player: ''
             }
         },
         watcher: {
@@ -6589,6 +6607,99 @@ export const PathTemplateSchemaResponseSchema = {
     ],
     title: 'PathTemplateSchemaResponse',
     description: '与 resolve_paths 同源.'
+} as const;
+
+export const PlaybackConfigSchema = {
+    properties: {
+        external: {
+            type: 'boolean',
+            title: 'External',
+            default: false
+        },
+        mode: {
+            $ref: '#/components/schemas/ExternalPlayerMode',
+            description: '`system` 用系统默认关联程序; `custom` 用 `player` 指定的程序.',
+            default: 'system',
+            'x-widget': 'RadioRows'
+        },
+        player: {
+            type: 'string',
+            title: 'Player',
+            description: '自定义播放器的可执行文件 (如 vlc.exe). 仅 mode=custom 使用; 空表示不可用.',
+            default: '',
+            'x-path-type': 'file',
+            'x-widget': 'PathPicker'
+        }
+    },
+    type: 'object',
+    title: 'PlaybackConfig',
+    description: '播放行为. `external` 关闭时走内置播放器 (由播放源插件提供码流).'
+} as const;
+
+export const PlaybackLocalOpenResponseSchema = {
+    properties: {
+        paths: {
+            items: {
+                type: 'string'
+            },
+            type: 'array',
+            title: 'Paths'
+        },
+        player: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Player'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: [
+        'paths'
+    ],
+    title: 'PlaybackLocalOpenResponse',
+    description: '拉起结果: 打开了哪些文件, 交给了哪个程序.'
+} as const;
+
+export const PlaybackLocalPlayerResponseSchema = {
+    properties: {
+        enabled: {
+            type: 'boolean',
+            title: 'Enabled'
+        },
+        mode: {
+            type: 'string',
+            enum: [
+                'system',
+                'custom'
+            ],
+            title: 'Mode'
+        },
+        player: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Player'
+        }
+    },
+    additionalProperties: false,
+    type: 'object',
+    required: [
+        'enabled',
+        'mode'
+    ],
+    title: 'PlaybackLocalPlayerResponse',
+    description: '本机播放的当前设置. 前端据此决定封面按钮与播放卡片的行为, 不含任何文件信息.'
 } as const;
 
 export const PlaybackSourceListResponseSchema = {

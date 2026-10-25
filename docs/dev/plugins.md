@@ -76,6 +76,10 @@ descriptor 声明来源能力、支持的内容类型、语言、访问 URL、`t
 
 `SourceError.detail` 会原样进入 502 响应体并展示给终端用户, 不允许在其中写入上游 URL、密钥或签名参数. 路由层的 `source_id` 只限制长度, 第三方 ID 的命名空间规则只在 descriptor 加载期执行.
 
+## 本机播放
+
+把播放交给服务所在机器的外部播放器**不是插件的能力**, 而是主机的一条设置 (`[playback]`) 加一个动作端点 (`POST /api/playback/{metadata_id}/open-local`). 它不从任何来源取内容, 与播放源是两回事; 语义、文件挑选与实测结论见 [local-playback.md](local-playback.md).
+
 ## 网络和运行时
 
 插件通过 `PluginContext` 得到共享 `HttpClient`、`WebClient` 和 `data_dir`. 使用共享客户端是契约的一部分: 插件请求必须遵守 Amane 的代理、重试、Host 限速和任务 HTTP 记录. HTML 用 `http_client.get_html` (拦截页抛 `SourceError`), JSON API 用 `get_json`. `data_dir` 是 `{cold.data_dir}/plugins/<plugin_id>`, 插件不允许写入该目录之外. 插件短 JSON 仍经由 `context.http_client`; 需要输出本机文件时声明 `file` 目标由主机打开, 插件不自行读盘.

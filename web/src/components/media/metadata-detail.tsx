@@ -10,7 +10,6 @@ import {
   Menu,
   Modal,
   SimpleGrid,
-  Skeleton,
   Stack,
   Text,
   Title,
@@ -33,12 +32,11 @@ import {
   IconRefresh,
   IconStar,
   IconTrash,
-  IconX,
 } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
-import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   batchMetadataUserTagsMutation,
@@ -74,7 +72,7 @@ import { proxyImageUrl } from "@/lib/utils";
 import { ProxyImage } from "@/components/media/proxy-image";
 import { CommentSection } from "@/components/media/comment-section";
 import { PlaybackPanel } from "@/components/media/playback-panel";
-import { LazyPlaybackPlayer } from "@/components/media/playback-player-lazy";
+import { useLocalPlayer, useOpenLocalPlayback } from "@/lib/media/local-player";
 import type { SeekRequest } from "@/components/media/playback-player";
 
 function formatRuntime(minutes?: number | null): string | null {
@@ -82,20 +80,6 @@ function formatRuntime(minutes?: number | null): string | null {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return h > 0 ? `${h}h ${m}m` : `${m}m`;
-}
-
-/**
- * 预告片地址的媒体类型.
- * 来源给出的地址大多是直链 MP4, 少数是 HLS 播放列表. 判据只取路径后缀, 并且偏向直链: 误判为 HLS 会把可以
- * 直接播放的地址交给 hls.js (经 XHR 取分片, 需要上游允许跨源), 漏判在 Android 与 iOS 上仍由内核原生播放.
- */
-function trailerKind(url: string): "video" | "hls" {
-  try {
-    return new URL(url).pathname.toLowerCase().endsWith(".m3u8") ? "hls" : "video";
-  } catch {
-    // 地址不能解析时按直链处理.
-    return "video";
-  }
 }
 
 function FieldBlock({
@@ -148,11 +132,16 @@ export function MetadataDetail({
   const [mergeOpen, setMergeOpen] = useState(false);
   const [cropOpen, setCropOpen] = useState(false);
   const [coverLightboxOpen, coverLightbox] = useDisclosure(false);
-  const [playingTrailer, setPlayingTrailer] = useState(false);
-  // 播放失败的预告片地址: 只对该地址有效, 记录之外 (条目切换或重新刮削换了地址) 一律不算失败.
-  const [failedTrailerUrl, setFailedTrailerUrl] = useState<string | null>(null);
   const [thumbBroken, setThumbBroken] = useState(false);
   const [posterBroken, setPosterBroken] = useState(false);
+  /** 播放请求计数: 封面按钮与就地播放面板之间的信号, 面板看到它变化就开始播放. */
+  const [playNonce, setPlayNonce] = useState(0);
+  // 外部播放器: 开着时封面按钮直接拉起本机播放器; 关着时把播放请求交给封面处的就地播放面板.
+  const localPlayer = useLocalPlayer();
+  const openLocal = useOpenLocalPlayback();
+  const external = localPlayer.data?.enabled === true;
+  // 默认不显示播放面板; 仅在外部播放器关闭、且点过封面播放按钮 (playNonce>0) 后, 才在封面原位就地播放.
+  const showEmbedded = external === false && playNonce > 0;
   // 评论时间戳的跳转: 本地请求负责即时响应 (同一秒连点也要重新触发), 地址栏的 `t` 负责分享与刷新定位.
   const [seekRequest, setSeekRequest] = useState<SeekRequest | null>(null);
   const [canSeek, setCanSeek] = useState(false);
@@ -186,9 +175,9 @@ export function MetadataDetail({
   const [prevId, setPrevId] = useState(id);
   if (id !== prevId) {
     setPrevId(id);
-    setPlayingTrailer(false);
     setThumbBroken(false);
     setPosterBroken(false);
+    setPlayNonce(0);
   }
 
   const { data, isLoading, isError } = useQuery({
@@ -403,8 +392,6 @@ export function MetadataDetail({
     thumbSrc && !thumbBroken ? thumbSrc : posterSrc && !posterBroken ? posterSrc : null;
   const coverUrl = proxyImageUrl(coverSrc);
   const coverFailed = Boolean((thumbSrc || posterSrc) && !coverUrl);
-  // 取成局部量, 供播放分支在回调里引用 (属性访问的收窄不进闭包).
-  const trailerUrl = item.trailer_url ?? null;
   const hasExtrafanart = item.extrafanart && item.extrafanart.length > 0;
   const runtime = formatRuntime(item.runtime);
   const allLocked = LOCKABLE_FIELDS.every((field) => lockedFields.has(field));
@@ -450,33 +437,58 @@ export function MetadataDetail({
     }
   }
 
-  // 失败记录按地址判定, 因此重新打开同一个地址时必须清除, 否则会直接显示上次的提示.
-  function openTrailer() {
-    setFailedTrailerUrl(null);
-    setPlayingTrailer(true);
+  // 封面上的大按钮 = 播正片. 外部播放器开着就交给它; 关着就把请求发给下方的播放面板 (滚动过去并开始播放).
+  function startPlayback() {
+    if (localPlayer.data?.enabled !== true) {
+      setPlayNonce((nonce) => nonce + 1);
+      return;
+    }
+    openLocal.mutate(
+      { path: { metadata_id: id } },
+      {
+        onSuccess: (result) => {
+          notifications.show({
+            message: t("detail.openLocalDone", {
+              player: result.player ?? t("detail.openLocalSystem"),
+            }),
+            color: "blue",
+          });
+        },
+        onError: (failure) => {
+          notifications.show({
+            message: extractErrorMessage(failure, t("detail.openLocalFailed")),
+            color: "red",
+          });
+        },
+      },
+    );
   }
 
-  const trailerPlayButton =
-    trailerUrl != null ? (
-      <ActionIcon
-        variant="filled"
-        color="dark"
-        radius="xl"
-        size={56}
-        aria-label={t("detail.playTrailer")}
-        onClick={openTrailer}
-        style={{
-          position: "absolute",
-          top: "50%",
-          left: "50%",
-          transform: "translate(-50%, -50%)",
-          opacity: 0.88,
-          zIndex: 1,
-        }}
-      >
-        <IconPlayerPlay size={28} />
-      </ActionIcon>
-    ) : null;
+  const coverPlayButton = (
+    <ActionIcon
+      variant="filled"
+      color="dark"
+      radius="xl"
+      size={56}
+      loading={openLocal.isPending}
+      aria-label={t("detail.play")}
+      // 封面容器同时承担「点空白看大图」: 播放按钮必须自己截断冒泡, 否则一次点击既起播又开灯箱.
+      onClick={(event) => {
+        event.stopPropagation();
+        startPlayback();
+      }}
+      style={{
+        position: "absolute",
+        top: "50%",
+        left: "50%",
+        transform: "translate(-50%, -50%)",
+        opacity: 0.88,
+        zIndex: 1,
+      }}
+    >
+      <IconPlayerPlay size={28} />
+    </ActionIcon>
+  );
 
   return (
     // 下沿留出的空白比其余三边大得多: 滚到底时末尾的卡片不贴视口底边, 还能再滚一截.
@@ -484,141 +496,99 @@ export function MetadataDetail({
     <Stack gap="md" pb={embedded ? undefined : "calc(var(--amane-vh) * 0.1)"}>
       <Group align="flex-start" wrap="wrap" gap="lg" style={{ flexDirection: "row-reverse" }}>
         <Stack gap="xs" style={{ flex: "3 1 360px", minWidth: 280 }}>
-          <div
-            style={{
-              position: "relative",
-              width: "100%",
-              borderRadius: "var(--mantine-radius-md)",
-              overflow: "hidden",
-              background: playingTrailer ? "#000" : "var(--mantine-color-default-hover)",
-              // 无可展示封面时用 16:9 占位; 有封面则由 img 撑住尺寸, 播放不跳变.
-              ...(!coverUrl ? { aspectRatio: "16 / 9" as const } : {}),
-            }}
-          >
-            {coverUrl && (
-              <ProxyImage
-                key={coverUrl}
-                src={coverUrl}
-                alt={playingTrailer ? "" : item.number}
-                referrerPolicy="no-referrer"
-                aria-hidden={playingTrailer}
-                onError={handleCoverError}
-                style={{
-                  width: "100%",
-                  height: "auto",
-                  display: "block",
-                  // 播放时保留原图占位, 避免切换到 video 后比例跳变.
-                  visibility: playingTrailer ? "hidden" : "visible",
-                }}
-                placeholder={<div style={{ aspectRatio: "16 / 9" }} aria-hidden />}
-              />
-            )}
-            {!playingTrailer && <FilePhaseOverlay phase={item.file_phase} />}
+          {showEmbedded ? (
+            <PlaybackPanel
+              metadataId={id}
+              playNonce={playNonce}
+              seekRequest={seekRequest}
+              onSeekHandled={() => setSeekRequest(null)}
+              onCanSeekChange={setCanSeek}
+            />
+          ) : (
+            <div
+              // 点封面看大图由容器承担, 不另铺一层铺满的透明按钮: 那层按钮会连同播放按钮一起
+              // 接住点击, 层级顺序一变就退化成"点播放却打开大图". 播放按钮自己截断冒泡.
+              onClick={coverUrl ? () => coverLightbox.open() : undefined}
+              // 容器替下原来的透明按钮, 键盘入口要一并补回 (播放按钮仍是容器内的独立按钮).
+              role={coverUrl ? "button" : undefined}
+              tabIndex={coverUrl ? 0 : undefined}
+              aria-label={coverUrl ? item.number : undefined}
+              onKeyDown={(event) => {
+                if (!coverUrl) return;
+                if (event.key !== "Enter" && event.key !== " ") return;
+                event.preventDefault();
+                coverLightbox.open();
+              }}
+              style={{
+                position: "relative",
+                width: "100%",
+                borderRadius: "var(--mantine-radius-md)",
+                overflow: "hidden",
+                background: "var(--mantine-color-default-hover)",
+                cursor: coverUrl ? "zoom-in" : undefined,
+                // 无可展示封面时用 16:9 占位; 有封面则由 img 撑住尺寸.
+                ...(!coverUrl ? { aspectRatio: "16 / 9" as const } : {}),
+              }}
+            >
+              {coverUrl && (
+                <ProxyImage
+                  key={coverUrl}
+                  src={coverUrl}
+                  alt={item.number}
+                  referrerPolicy="no-referrer"
+                  onError={handleCoverError}
+                  style={{ width: "100%", height: "auto", display: "block" }}
+                  placeholder={<div style={{ aspectRatio: "16 / 9" }} aria-hidden />}
+                />
+              )}
+              <FilePhaseOverlay phase={item.file_phase} />
 
-            {playingTrailer && trailerUrl != null ? (
-              <>
-                {/* 绝对定位铺满封面所在的盒子: 盒子的高度由封面撑住, 播放器不能改写它.
-                    失败提示与点播面板同形: 播放器不渲染, 黑底给出说明. */}
-                <div style={{ position: "absolute", inset: 0, background: "#000" }}>
-                  {failedTrailerUrl === trailerUrl ? (
-                    <div
-                      style={{
-                        height: "100%",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        padding: 16,
-                      }}
-                    >
-                      <Alert color="red" variant="light" maw={520}>
-                        <Text size="sm">{t("detail.trailerFailed")}</Text>
-                      </Alert>
-                    </div>
-                  ) : (
-                    <Suspense fallback={<Skeleton height="100%" />}>
-                      <LazyPlaybackPlayer
-                        key={trailerUrl}
-                        href={trailerUrl}
-                        kind={trailerKind(trailerUrl)}
-                        seekable
-                        autoPlay
-                        onFailed={() => setFailedTrailerUrl(trailerUrl)}
-                      />
-                    </Suspense>
-                  )}
-                </div>
-                <ActionIcon
-                  variant="filled"
-                  color="dark"
-                  radius="xl"
-                  size="sm"
-                  aria-label={t("detail.closeTrailer")}
-                  onClick={() => setPlayingTrailer(false)}
-                  style={{ position: "absolute", top: 8, right: 8, zIndex: 1 }}
-                >
-                  <IconX size={14} />
-                </ActionIcon>
-              </>
-            ) : coverUrl ? (
-              <>
-                <button
-                  type="button"
-                  onClick={coverLightbox.open}
-                  aria-label={item.number}
+              {coverUrl ? (
+                coverPlayButton
+              ) : (
+                <div
                   style={{
                     position: "absolute",
                     inset: 0,
-                    padding: 0,
-                    border: "none",
-                    background: "none",
-                    cursor: "zoom-in",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    gap: 10,
+                    padding: 16,
                   }}
-                />
-                {trailerPlayButton}
-              </>
-            ) : (
-              <div
-                style={{
-                  position: "absolute",
-                  inset: 0,
-                  display: "flex",
-                  flexDirection: "column",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  gap: 10,
-                  padding: 16,
-                }}
-              >
-                <IconPhotoOff
-                  size={36}
-                  stroke={1.25}
-                  color="var(--mantine-color-dimmed)"
-                  aria-hidden
-                />
-                <Text size="sm" ff="monospace" c="dimmed" ta="center">
-                  {item.number}
-                </Text>
-                {coverFailed && (
-                  <Text size="xs" c="dimmed" ta="center">
-                    {t("detail.coverUnavailable")}
+                >
+                  <IconPhotoOff
+                    size={36}
+                    stroke={1.25}
+                    color="var(--mantine-color-dimmed)"
+                    aria-hidden
+                  />
+                  <Text size="sm" ff="monospace" c="dimmed" ta="center">
+                    {item.number}
                   </Text>
-                )}
-                {trailerUrl != null && (
+                  {coverFailed && (
+                    <Text size="xs" c="dimmed" ta="center">
+                      {t("detail.coverUnavailable")}
+                    </Text>
+                  )}
                   <ActionIcon
                     variant="filled"
                     color="dark"
                     radius="xl"
                     size={48}
-                    aria-label={t("detail.playTrailer")}
-                    onClick={openTrailer}
+                    loading={openLocal.isPending}
+                    aria-label={t("detail.play")}
+                    onClick={startPlayback}
                     style={{ opacity: 0.88 }}
                   >
                     <IconPlayerPlay size={24} />
                   </ActionIcon>
-                )}
-              </div>
-            )}
-          </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <Group gap="xs" wrap="wrap">
             <Tooltip label={t("detail.cropPoster.noThumb")} disabled={thumbSrc != null}>
               <Box display="inline-block">
@@ -906,13 +876,6 @@ export function MetadataDetail({
           </Group>
         </Stack>
       </Group>
-
-      <PlaybackPanel
-        metadataId={id}
-        seekRequest={seekRequest}
-        onSeekHandled={() => setSeekRequest(null)}
-        onCanSeekChange={setCanSeek}
-      />
 
       {/* 宽屏下并排, 窄屏落回上下叠放; 各自保持自然高度, 拉平会把空白挪进较短的一栏. */}
       <SimpleGrid cols={{ base: 1, lg: 2 }} spacing="md" style={{ alignItems: "start" }}>

@@ -1,20 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
+from pathlib import Path as FsPath
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response
+from fastapi import APIRouter, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 
+from ...config.manager import ExternalPlayerMode
+from ...db.models import MediaFile
+from ...library import MEDIA_EXTENSIONS
 from ...net.errors import SourceError
 from ...playback.factory import SOURCE_ID_MAX_LEN, ListedSource, PlaybackFactory
 from ...playback.file_response import IndexedFileResponse
 from ...playback.hls import PLAYLIST_CACHE_CONTROL, is_hls_content_type
 from ...playback.href import playlist_href, stream_href, subtitle_href
+from ...playback.local_player import LocalPlayerError, launch_local_player
 from ...playback.proxy import NOSNIFF
 from ...playback.query import playback_query
 from ...plugins.api import PATH_SEGMENT_PATTERN, FilePlaybackTarget, PlaybackQuery, UpstreamPlaybackTarget
-from ..deps import RepoDep, RuntimeDep
+from ...utils.threads import path_exists
+from ..deps import ConfigDep, RepoDep, RuntimeDep
 from ..models.playback import (
+    PlaybackLocalOpenResponse,
+    PlaybackLocalPlayerResponse,
     PlaybackSourceListResponse,
     PlaybackSourceOption,
     PlaybackStreamItem,
@@ -97,6 +106,91 @@ async def list_playback_sources(runtime: RuntimeDep) -> Response:
         ]
     )
     return JSONResponse(content=body.model_dump(mode="json"), headers={"Cache-Control": "private, no-cache"})
+
+
+def _player_name(player: str) -> str | None:
+    """配置的播放器路径取其文件名: 前端只用来拼文案, 不承载路径信息."""
+    if not player:
+        return None
+    return FsPath(player).name or None
+
+
+def _pick_local_files(files: Sequence[MediaFile], *, file_id: int | None) -> list[str]:
+    """挑出交给外部播放器的文件, 主文件排在最前.
+
+    ``file_id`` 给了就只开那一条 (必须是该条目下的文件). 没给时按体积取主文件 — 条目下常混着预告与
+    样片, 体积最大的那个才是正片; 其余视频按入库顺序 (id 升序) 跟在后面, 供支持多参数的播放器排成列表.
+    """
+    if file_id is not None:
+        chosen = next((row for row in files if row.id == file_id), None)
+        if chosen is None:
+            raise HTTPException(status_code=400, detail="该文件不属于这个条目")
+        return [chosen.path]
+
+    videos = [row for row in files if FsPath(row.path).suffix.casefold() in MEDIA_EXTENSIONS]
+    if not videos:
+        raise HTTPException(status_code=404, detail="该条目没有视频文件")
+    primary = max(videos, key=lambda row: row.size or 0)
+    return [primary.path, *(row.path for row in videos if row.id != primary.id)]
+
+
+@router.get("/local-player", response_model=PlaybackLocalPlayerResponse)
+async def get_local_player(config: ConfigDep) -> Response:
+    """本机播放的当前设置. 不读库, 打开详情页即可调用."""
+    settings = config.hot.playback
+    body = PlaybackLocalPlayerResponse(
+        enabled=settings.external,
+        mode=settings.mode.value,
+        player=None if settings.mode is ExternalPlayerMode.SYSTEM else _player_name(settings.player),
+    )
+    return JSONResponse(content=body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/{metadata_id}/open-local", response_model=PlaybackLocalOpenResponse)
+async def open_local_playback(
+    metadata_id: Annotated[int, Path(ge=1)],
+    repo: RepoDep,
+    config: ConfigDep,
+    file_id: Annotated[int | None, Query(ge=1)] = None,
+) -> Response:
+    """用本机外部播放器打开条目的文件.
+
+    路径只取自条目索引, 不接受任意地址: 这个动作会在服务所在机器上执行程序, 收窄到"已入库的文件 +
+    已配置的播放器"之后, 能触发的范围才是有界的.
+    """
+    settings = config.hot.playback
+    if not settings.external:
+        raise HTTPException(status_code=403, detail="外部播放未启用")
+    if settings.mode is ExternalPlayerMode.CUSTOM and not settings.player:
+        raise HTTPException(status_code=400, detail="未配置自定义播放器路径")
+    if await repo.get_metadata(metadata_id) is None:
+        raise HTTPException(status_code=404, detail="影片不存在")
+
+    files = await repo.get_media_by_metadata_id(metadata_id)
+    if not files:
+        raise HTTPException(status_code=404, detail="该条目还没有索引到任何文件")
+
+    candidates = _pick_local_files(files, file_id=file_id)
+    present = [path for path in (FsPath(item) for item in candidates) if await path_exists(path)]
+    if not present:
+        raise HTTPException(status_code=404, detail=f"文件已不在磁盘上: {candidates[0]}")
+    # 只有 `custom` 才把配置里的播放器透传下去: 切回 `system` 后旧路径仍留在配置里, 继续用它会让
+    # "系统默认"名不副实; 路径失效时更会直接报错, 而不是回退到关联程序.
+    player = settings.player if settings.mode is ExternalPlayerMode.CUSTOM else ""
+    if settings.mode is ExternalPlayerMode.SYSTEM:
+        # 系统关联只认一个路径, 多文件留给 `custom`.
+        present = present[:1]
+
+    try:
+        result = await launch_local_player(present, player=player)
+    except LocalPlayerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    body = PlaybackLocalOpenResponse(
+        paths=[str(path) for path in result.paths],
+        player=result.player,
+    )
+    return JSONResponse(content=body.model_dump(mode="json"), headers={"Cache-Control": "no-store"})
 
 
 @router.get("/{source_id}/{metadata_id}/streams", response_model=PlaybackStreamListResponse)

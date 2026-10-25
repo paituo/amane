@@ -7,13 +7,13 @@
     "network": "网络",
     "worker": "任务引擎",
     "watcher": "文件监控",
-    "everything": "Everything",
+    "everything": "Everything 索引",
     "logging": "日志",
     "sr": "图像超分",
     "llm": "LLM 翻译",
     "watermark": "水印",
     "search": "检索",
-    "everything": "Everything 索引"
+    "playback": "播放器"
   },
   "config": {
     "loadError": "加载配置失败"
@@ -1031,6 +1031,28 @@
       "config": {
         "label": "插件配置",
         "description": "由插件提供的配置项"
+      }
+    },
+    "playback": {
+      "external": {
+        "label": "使用外部播放器",
+        "description": "开启后，播放改为调用系统默认或自定义播放器打开文件，不使用内置播放器"
+      },
+      "mode": {
+        "label": "播放器来源",
+        "description": "选择用哪一个程序打开媒体文件",
+        "options": {
+          "system": "使用系统播放器",
+          "custom": "自定义播放器路径"
+        },
+        "hints": {
+          "system": "用操作系统默认关联程序打开媒体文件",
+          "custom": "指定外部播放器可执行文件，打开时以其启动"
+        }
+      },
+      "player": {
+        "label": "自定义播放器路径",
+        "description": "播放器可执行文件的完整路径（如 VLC 的 vlc.exe）。只在选择自定义播放器时使用"
       }
     }
   }

@@ -83,6 +83,20 @@ export function useEnumI18n(fieldPath: string, prefix: string) {
 }
 
 /**
+ * 逐项说明, 供 `RadioRows` 这类"一行一个选项"的版式使用.
+ * 取值 `<fieldPath>.hints.<option>`; 没有该键时返回 undefined (视为这一项没有说明, 不是缺翻译).
+ */
+export function useEnumHintI18n(fieldPath: string, prefix: string) {
+  const { ns, keyPath } = parsePrefix(prefix);
+  const { t, i18n } = useTranslation(ns as never);
+
+  return (value: string | number): string | undefined => {
+    const key = buildKey(keyPath, fieldPath, `hints.${value}`);
+    return i18n.exists(key, { ns: ns as never }) ? t(key as never) : undefined;
+  };
+}
+
+/**
  * i18n for dict keys (e.g., field_language/field_priority tab labels).
  * Looks up `${keyPath}.${fieldPath}.options.${key}` for display name.
  */
