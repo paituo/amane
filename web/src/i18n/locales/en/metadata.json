@@ -44,6 +44,7 @@
     "leaked": "LEAK"
   },
   "columns": {
+    "poster": "Poster",
     "number": "Number",
     "title": "Title",
     "studio": "Studio",

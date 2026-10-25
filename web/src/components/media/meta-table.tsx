@@ -3,6 +3,7 @@ import {
   Badge,
   Box,
   Button,
+  Center,
   Checkbox,
   Group,
   Menu,
@@ -17,8 +18,10 @@ import { notifications } from "@mantine/notifications";
 import {
   IconDots,
   IconInfoCircle,
+  IconPhoto,
   IconPlaylistAdd,
   IconPlayerPlay,
+  IconPlayerPlayFilled,
   IconRefresh,
   IconSelectAll,
   IconSquareOff,
@@ -45,7 +48,9 @@ import type { MetadataResponse, MetadataSortField, SortOrder } from "@/client/ty
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { ListToolbar } from "@/components/common/list-toolbar";
 import { MetadataViewer } from "@/components/media/metadata-viewer";
+import { PlaybackModal } from "@/components/media/playback-modal";
 import { PlaybackQueueModal } from "@/components/media/playback-queue-modal";
+import { ProxyImage } from "@/components/media/proxy-image";
 import { SortableTh } from "@/components/common/sortable-th";
 import { SelectionBar } from "@/components/common/selection-bar";
 import { useAppMutation } from "@/hooks/use-app-mutation";
@@ -55,12 +60,74 @@ import { extractErrorMessage } from "@/lib/api-error";
 import { confirm } from "@/lib/confirm";
 import { USER_TAG_FACET_LIST } from "@/lib/facets";
 import { useFavoriteIds, useFavoriteMutation } from "@/lib/media/favorites";
-import { useLocalPlayer } from "@/lib/media/local-player";
+import { useLocalPlayer, useOpenLocalPlayback } from "@/lib/media/local-player";
 import { entryFromMetadata } from "@/lib/media/playlist-entries";
+import { proxyImageUrl } from "@/lib/utils";
 import { type PlaylistEntry, usePlaylistStore } from "@/stores/playlist";
 import { type MetaTableColumnKey, useUIStore } from "@/stores/ui";
 import { VrBadge } from "./vr-badge";
 import classes from "./meta-table.module.css";
+
+/** 行内缩略海报: 与海报墙、媒体库文件列表同 0.7 比例, 高度由宽度算得 (44 / 0.7 ≈ 63). */
+const POSTER_WIDTH = 44;
+const POSTER_HEIGHT = 63;
+
+interface RowPosterProps {
+  item: MetadataResponse;
+  onPlay: (item: MetadataResponse) => void;
+}
+
+/**
+ * 列表行的封面预览与播放入口.
+ *
+ * 海报本身不绑点击: 整行的 openRow 已经负责"点一行看详情", 图片只是单元格里的内容, 点它自然落到行处理器;
+ * 右下角的播放键渲染成 button, openRow 的 target 判断会主动跳过按钮, 不必再自行 stopPropagation.
+ * 播放走哪条路由由宿主决定 (外部播放器直拉 / 内嵌播放器), 这里只把条目转出去.
+ */
+function RowPoster({ item, onPlay }: RowPosterProps) {
+  const { t } = useTranslation("metadata");
+  const [errored, setErrored] = useState(false);
+  const src = proxyImageUrl(item.poster_url ?? item.poster_urls?.[0]);
+
+  return (
+    <Box
+      pos="relative"
+      w={POSTER_WIDTH}
+      h={POSTER_HEIGHT}
+      style={{
+        overflow: "hidden",
+        borderRadius: "var(--mantine-radius-sm)",
+        background: "var(--mantine-color-default-hover)",
+      }}
+    >
+      {src && !errored ? (
+        <ProxyImage
+          src={src}
+          alt={item.number}
+          loading="lazy"
+          referrerPolicy="no-referrer"
+          style={{ display: "block", width: "100%", height: "100%", objectFit: "cover" }}
+          onError={() => setErrored(true)}
+        />
+      ) : (
+        <Center h="100%">
+          <IconPhoto size={16} color="var(--mantine-color-dimmed)" />
+        </Center>
+      )}
+      <HintedActionIcon
+        size={20}
+        radius="xl"
+        variant="transparent"
+        color="white"
+        style={{ position: "absolute", right: 2, bottom: 2, background: "rgba(0, 0, 0, 0.55)" }}
+        label={t("card.play")}
+        onClick={() => onPlay(item)}
+      >
+        <IconPlayerPlayFilled size={11} />
+      </HintedActionIcon>
+    </Box>
+  );
+}
 
 const SORTABLE_COLUMNS = [
   "number",
@@ -174,6 +241,8 @@ export function MetaTable({
   const [openId, setOpenId] = useState<number | null>(null);
   // 内嵌播放器的队列: 外部播放器未启用时, "播放"落到这里.
   const [queue, setQueue] = useState<readonly PlaylistEntry[]>([]);
+  // 行内播放键的落点: 外部播放器未启用时弹内嵌播放器单条播放.
+  const [playId, setPlayId] = useState<number | null>(null);
 
   const { data: userTags } = useQuery(listFacetsOptions(USER_TAG_FACET_LIST));
   const favoriteIds = useFavoriteIds();
@@ -249,8 +318,10 @@ export function MetaTable({
   function openRow(event: MouseEvent<HTMLTableRowElement>, id: number) {
     if (event.button !== 0) return;
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    // 判 Element 而不是 HTMLElement: 点图标按钮时 target 是内层的 <svg>/<path>, 属于 SVGElement,
+    // 用 HTMLElement 判会整段跳过, 于是点"播放"连带把详情弹窗也打开.
     const target = event.target;
-    if (target instanceof HTMLElement && target.closest("input, button, [role='menu']") != null) {
+    if (target instanceof Element && target.closest("input, button, [role='menu']") != null) {
       return;
     }
     event.preventDefault();
@@ -288,6 +359,7 @@ export function MetaTable({
   const busy = batchScrape.isPending || batchDelete.isPending || batchTags.isPending;
 
   const localPlayer = useLocalPlayer();
+  const openLocal = useOpenLocalPlayback();
   const appendToPlaylist = usePlaylistStore((state) => state.append);
   const openPlaylist = useAppMutation({
     mutationOptions: openLocalPlaylistMutation(),
@@ -298,8 +370,29 @@ export function MetaTable({
       }),
   });
 
+  /** 内嵌播放器的标题: 只在当前页找, 翻页后找不到就留空, 面板自己会按 id 拉详情. */
+  const playItem = playId != null ? items.find((item) => item.id === playId) : undefined;
+
   /** 选中项的快照, 顺序照当前页顺序. */
   const selectedEntries = items.filter((item) => selected.has(item.id)).map(entryFromMetadata);
+
+  /** 单条播放: 外部播放器开着就直接拉起本机播放器, 否则弹内嵌播放器. */
+  function handlePlay(item: MetadataResponse) {
+    if (localPlayer.data?.enabled === true) {
+      openLocal.mutate(
+        { path: { metadata_id: item.id } },
+        {
+          onError: (err) =>
+            notifications.show({
+              message: extractErrorMessage(err, t("common:toast.operationFailed")),
+              color: "red",
+            }),
+        },
+      );
+      return;
+    }
+    setPlayId(item.id);
+  }
 
   function handlePlaySelected() {
     if (selectedEntries.length === 0) return;
@@ -429,6 +522,8 @@ export function MetaTable({
               <Table.Th w={40}>
                 <Checkbox checked={allSelected} onChange={() => toggleAll(pageIds)} />
               </Table.Th>
+              {/* 海报列紧接勾选列: 与媒体库文件列表同位置, 两处表格的视觉重心保持一致. */}
+              <Table.Th w={POSTER_WIDTH + 20}>{t("columns.poster")}</Table.Th>
               {SORTABLE_COLUMNS.map((field) => (
                 <SortableTh
                   key={field}
@@ -468,6 +563,9 @@ export function MetaTable({
               >
                 <Table.Td>
                   <Checkbox checked={selected.has(item.id)} onChange={() => toggleOne(item.id)} />
+                </Table.Td>
+                <Table.Td>
+                  <RowPoster item={item} onPlay={handlePlay} />
                 </Table.Td>
                 {SORTABLE_COLUMNS.map((field) => {
                   const value = cellValue(item, field);
@@ -684,6 +782,11 @@ export function MetaTable({
           </Group>
         </Stack>
       </Modal>
+      <PlaybackModal
+        metadataId={playId}
+        title={playItem?.number ?? ""}
+        onClose={() => setPlayId(null)}
+      />
       <PlaybackQueueModal
         entries={queue}
         title={queue.length === 1 ? queue[0].number : t("playlist.title")}

@@ -44,6 +44,7 @@
     "leaked": "流出"
   },
   "columns": {
+    "poster": "海报",
     "number": "番号",
     "title": "标题",
     "studio": "制作商",
