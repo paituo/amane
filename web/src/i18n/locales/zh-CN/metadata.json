@@ -126,6 +126,8 @@
     "playbackFailedHls": "无法播放此码流(播放器错误 {{details}}): {{url}}",
     "playbackFailedHlsWithStatus": "无法播放此码流(播放器错误 {{details}}, HTTP {{status}}): {{url}}",
     "playbackUnsupported": "此播放源的媒体类型无法在页面内播放",
+    "playbackCodecUnsupported": "当前浏览器无法解码这条流的视频编码(常见于 HEVC/H.265、AV1), 换一条码流或播放源试试。",
+    "playbackConfigureExternal": "配置外部播放器",
     "playbackUnavailable": "该播放源当前不可用",
     "playbackUnavailableOption": "{{name}}(当前不可用)",
     "playbackSourcesFailed": "无法加载播放源",

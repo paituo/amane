@@ -16,6 +16,7 @@ import {
 import { notifications } from "@mantine/notifications";
 import { IconChevronDown, IconPlayerPlay, IconRefresh } from "@tabler/icons-react";
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "@tanstack/react-router";
 import type { TFunction } from "i18next";
 import { Suspense, useEffect, useRef, useState, type ReactNode, type Ref } from "react";
 import { useTranslation } from "react-i18next";
@@ -30,7 +31,7 @@ import {
   APP_SHELL_HEADER_HEIGHT,
   APP_SHELL_MAIN_HEIGHT,
 } from "@/components/layout/app-shell-metrics";
-import type { HlsFailure, SeekRequest } from "@/components/media/playback-player";
+import type { SeekRequest } from "@/components/media/playback-player";
 import { LazyPlaybackPlayer } from "@/components/media/playback-player-lazy";
 import { extractErrorMessage } from "@/lib/api-error";
 import { apiFetch } from "@/lib/api-token";
@@ -39,6 +40,11 @@ import {
   useLocalPlayer,
   useOpenLocalPlayback,
 } from "@/lib/media/local-player";
+import {
+  isCodecFailure,
+  type HlsFailure,
+  type PlaybackFailure,
+} from "@/lib/media/playback-failure";
 import { orderPlaybackSources } from "@/lib/media/source-order";
 import { useUIStore } from "@/stores/ui";
 
@@ -117,6 +123,19 @@ function hlsFailureMessage(failure: HlsFailure, t: TFunction<"metadata">): strin
       });
 }
 
+/** 失败原因中属于 hls.js 的那一半; 其它来源没有这些字段, 提示改由状态码或探测结果给出. */
+function hlsReason(failure: PlaybackFailure, t: TFunction<"metadata">): string | null {
+  return failure.kind === "hls" ? hlsFailureMessage(failure.hls, t) : null;
+}
+
+/**
+ * 浏览器自己给出的失败原因, 只出现在原生播放路径上.
+ * 它是内核的实现细节 (例如 `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`), 不作为提示正文, 只在下面作为诊断信息附上.
+ */
+function browserReason(failure: PlaybackFailure): string | null {
+  return failure.kind === "media" ? failure.detail : null;
+}
+
 // 后端 detail 缺失时的提示取值顺序: hls.js 错误原因优先, 其次为探测响应的 HTTP 状态码, 最后为基础文案.
 type PlaybackFallback = {
   plain: string;
@@ -132,11 +151,14 @@ function fallbackMessage(fallback: PlaybackFallback, status: number | null): str
 }
 
 // 提示的取值顺序: 后端 detail 优先; 后端没有给出 detail 时, 采用 fallback 给出的原因或状态码.
-async function readPlaybackDetail(
+//
+// `served` 表示服务端确实给出了这条流的字节 (2xx / 206). 播放器报错时它用来区分两类失败: 字节取不到是来源
+// 侧的问题, 字节能取到而浏览器仍然报错属于解码层面的限制 — 后者重试没有意义, 见 `isCodecFailure`.
+async function probePlayback(
   href: string,
   fallback: PlaybackFallback,
   options: { ranged: boolean },
-): Promise<string> {
+): Promise<{ served: boolean; message: string }> {
   try {
     const response = await apiFetch(
       href,
@@ -144,7 +166,7 @@ async function readPlaybackDetail(
     );
     // 2xx 表示探测本身已经成功, 该响应的状态码不含失败信息.
     if (response.ok || response.status === 206) {
-      return fallbackMessage(fallback, null);
+      return { served: true, message: fallbackMessage(fallback, null) };
     }
     const body: unknown = await response.json().catch(() => null);
     if (
@@ -154,17 +176,35 @@ async function readPlaybackDetail(
       typeof body.detail === "string" &&
       body.detail
     ) {
-      return body.detail;
+      return { served: false, message: body.detail };
     }
-    return fallbackMessage(fallback, response.status);
+    return { served: false, message: fallbackMessage(fallback, response.status) };
   } catch (error) {
-    return fallback.hlsReason ?? extractErrorMessage(error, fallback.plain);
+    return {
+      served: false,
+      message: fallback.hlsReason ?? extractErrorMessage(error, fallback.plain),
+    };
   }
 }
 
 type PickerOption = {
   value: string;
   label: string;
+};
+
+/**
+ * 一次播放失败的记录. 按地址保存: 换一条流之后原记录不再适用, 播放器重新挂载时也不会被旧记录挡住.
+ */
+type PlaybackError = {
+  href: string;
+  message: string;
+  /** 浏览器给出的失败原因, 作为诊断信息显示在提示下方; 没有时为空. */
+  detail: string | null;
+  /**
+   * 编解码器层面的限制: 字节已经取到, 浏览器解不了.
+   * 这类失败另给外部播放器的设置入口; 换码流与应用设置都在用户手上, 重试多半不会改变结果.
+   */
+  codec: boolean;
 };
 
 // 选项过多时改用下拉菜单: 标签是主机拼好的完整名称, 菜单为长名称留出宽度.
@@ -235,38 +275,54 @@ function PlayerFrame({
  * 播放窗口内的提示: 探测失败、播放失败与不支持的媒体类型均在窗口内居中显示.
  *
  * 失败提示带重试入口; 媒体类型不支持属于内容本身的限制, 重试不会改变结果, 因此不提供重试入口.
+ * 编码不受支持时另由 `action` 给出外部播放器的设置入口.
  */
 function PlayerMessage({
   tone = "error",
   onRetry,
   retrying = false,
+  hint,
+  action,
   children,
 }: {
-  tone?: "error" | "neutral";
+  tone?: "error" | "warning" | "neutral";
   onRetry?: () => void;
   /** 重试请求正在进行: 流列表重取期间为真; 播放器的重新挂载无从观察, 恒为假. */
   retrying?: boolean;
+  /** 诊断用的第二行, 例如浏览器给出的失败原因; 为空时不占位. */
+  hint?: string | null;
+  /** 替代重试入口的动作, 例如"用外部播放器打开". */
+  action?: ReactNode;
   children: ReactNode;
 }) {
+  const color = tone === "warning" ? "orange" : tone === "neutral" ? "gray" : "red";
   return (
     <Center h="100%" w="100%" p="md">
-      <Alert color={tone === "error" ? "red" : "gray"} variant="light" maw={520}>
-        <Group gap="xs" wrap="nowrap" align="center">
-          <Text size="sm" style={{ flex: 1, minWidth: 0 }}>
-            {children}
-          </Text>
-          {onRetry != null && (
-            <ActionIcon
-              variant="transparent"
-              color="red"
-              size="sm"
-              loading={retrying}
-              onClick={onRetry}
-            >
-              <IconRefresh size={16} />
-            </ActionIcon>
-          )}
-        </Group>
+      <Alert color={color} variant="light" maw={520}>
+        <Stack gap="xs">
+          <Group gap="xs" wrap="nowrap" align="center">
+            <Text size="sm" style={{ flex: 1, minWidth: 0 }}>
+              {children}
+            </Text>
+            {onRetry != null && (
+              <ActionIcon
+                variant="transparent"
+                color={color}
+                size="sm"
+                loading={retrying}
+                onClick={onRetry}
+              >
+                <IconRefresh size={16} />
+              </ActionIcon>
+            )}
+          </Group>
+          {hint != null ? (
+            <Text size="xs" c="dimmed" style={{ wordBreak: "break-all" }}>
+              {hint}
+            </Text>
+          ) : null}
+          {action != null ? <Group gap="xs">{action}</Group> : null}
+        </Stack>
       </Alert>
     </Center>
   );
@@ -335,7 +391,7 @@ export function PlaybackPanel({
   );
   const [pickedSourceId, setPickedSourceId] = useState<string | null>(null);
   const [pickedStream, setPickedStream] = useState<{ sourceId: string; key: string } | null>(null);
-  const [error, setError] = useState<{ href: string; message: string } | null>(null);
+  const [error, setError] = useState<PlaybackError | null>(null);
   // 播放失败的重试计数: 地址不变时播放器不会重新装载, 该计数改变 key 之后才会重新挂载.
   const [reloadNonce, setReloadNonce] = useState(0);
 
@@ -362,14 +418,14 @@ export function PlaybackPanel({
     ? extractErrorMessage(streamsQuery.error, t("detail.playbackStreamsFailed"))
     : null;
   const kind = selected == null ? "other" : mediaKind(selected.content_type);
-  const shownError = selected != null && error?.href === selected.href ? error.message : null;
+  const shownError = selected != null && error?.href === selected.href ? error : null;
   // 不可用项不渲染播放器, 其 href 上的失败记录来自该来源此前仍可用的状态, 因此探测原因优先.
   const notice =
     streamError ??
     (selected == null
       ? null
       : selected.available
-        ? shownError
+        ? (shownError?.message ?? null)
         : (failureReason(selected) ?? t("detail.playbackUnavailable")));
 
   /**
@@ -455,6 +511,23 @@ export function PlaybackPanel({
       },
     );
   };
+
+  /**
+   * 编码不受支持时的兜底入口.
+   *
+   * 这里不能直接"用外部播放器打开": 本面板只在外部播放器关闭时渲染播放器, 而那个接口在开关关闭时拒绝
+   * 请求 (见后端的 `_launch_paths`). 因此给出的是播放器设置的入口, 由用户决定是否改用它 —
+   * 页面内播放与外部播放目前是整份二选一, 不由单个条目决定.
+   */
+  const codecAction = (
+    // 链接是外层的 `<Link>`: 经 Mantine 的 `component` 多态传入时路由的泛型会丢失, `search` 的类型随之无法解析.
+    // 按钮渲染成 `<span>`: `<a>` 里不能再套 `<button>`.
+    <Link to="/settings" search={{ section: "playback" }}>
+      <Button component="span" size="compact-sm" variant="light" color="orange">
+        {t("detail.playbackConfigureExternal")}
+      </Button>
+    </Link>
+  );
 
   // 外部播放: 不使用内置播放器, 因此没有来源与码流可选, 卡片里只剩"交给播放器"这一个入口.
   if (external) {
@@ -593,12 +666,26 @@ export function PlaybackPanel({
           {streamsQuery.isPending ? (
             <Skeleton height="100%" />
           ) : notice != null ? (
-            <PlayerMessage
-              onRetry={shownError != null ? retryPlayback : retryStreams}
-              retrying={shownError == null && streamsQuery.isFetching}
-            >
-              {notice}
-            </PlayerMessage>
+            // 编码不受支持的提示以外部播放器的设置入口为主; 重试图标仍然保留 — 同一个错误码也可能是解码器的
+            // 瞬时故障, 不给重试的话单来源单码流的条目就走进了死路.
+            shownError?.codec === true ? (
+              <PlayerMessage
+                tone="warning"
+                hint={shownError.detail}
+                action={codecAction}
+                onRetry={retryPlayback}
+                retrying={streamsQuery.isFetching}
+              >
+                {notice}
+              </PlayerMessage>
+            ) : (
+              <PlayerMessage
+                onRetry={shownError != null ? retryPlayback : retryStreams}
+                retrying={shownError == null && streamsQuery.isFetching}
+              >
+                {notice}
+              </PlayerMessage>
+            )
           ) : selected == null ? (
             <PlayerMessage onRetry={retryStreams} retrying={streamsQuery.isFetching}>
               {t("detail.playbackUnavailable")}
@@ -621,15 +708,25 @@ export function PlaybackPanel({
                     : { request: seekRequest, onHandled: onSeekHandled }
                 }
                 onFailed={(failure) => {
-                  void readPlaybackDetail(
+                  void probePlayback(
                     selected.href,
                     {
                       plain: t("detail.playbackFailed"),
                       withStatus: (status) => t("detail.playbackFailedWithStatus", { status }),
-                      hlsReason: failure == null ? null : hlsFailureMessage(failure, t),
+                      hlsReason: hlsReason(failure, t),
                     },
                     { ranged: kind === "video" },
-                  ).then((message) => setError({ href: selected.href, message }));
+                  ).then((probe) => {
+                    // 服务端确实给出了字节, 浏览器仍然报错: 这是解码层面的限制, 与来源、网络无关.
+                    // 反过来 (字节取不到) 仍按普通失败处理, 提示里带着状态码或后端的 detail.
+                    const codec = probe.served && isCodecFailure(failure);
+                    setError({
+                      href: selected.href,
+                      message: codec ? t("detail.playbackCodecUnsupported") : probe.message,
+                      detail: codec ? browserReason(failure) : null,
+                      codec,
+                    });
+                  });
                 }}
               />
             </Suspense>

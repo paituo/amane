@@ -55,6 +55,7 @@ import { useTranslation } from "react-i18next";
 import type { PlaybackSubtitleItem } from "@/client/types.gen";
 import { useLatestRef } from "@/hooks/use-latest-ref";
 import i18n from "@/i18n";
+import type { HlsFailure, PlaybackFailure } from "@/lib/media/playback-failure";
 import { shellSystemLevels } from "@/lib/shell";
 
 import classes from "./playback-player.module.css";
@@ -157,13 +158,6 @@ function shareableTimeUrl(seconds: number): string {
 // media-chrome 的控制条文案来自其自带语言包, 语言与 i18next 保持一致.
 // 该模块随播放器一并懒加载, 因此界面语言切换后需要重新挂载播放器才会生效.
 setLanguage(i18n.resolvedLanguage ?? i18n.language);
-
-/** hls.js 致命错误中构成提示文案的字段, 后端没有给出 detail 时使用. */
-export type HlsFailure = {
-  details: string;
-  status: number | null;
-  target: string;
-};
 
 // 失败地址取自分片或错误数据本身; 两者都缺失时使用播放源地址, 该地址仍属于当前来源.
 function hlsFailure(data: ErrorData, href: string): HlsFailure {
@@ -1181,7 +1175,8 @@ export type PlaybackPlayerProps = {
   seek?: PlaybackSeek;
   /** 挂载后立即开始播放, 用于由点击挂载播放器的场合. */
   autoPlay?: boolean;
-  onFailed: (failure: HlsFailure | null) => void;
+  /** 播放失败的原因; 分类与提示由调用方决定, 见 `isCodecFailure`. */
+  onFailed: (failure: PlaybackFailure) => void;
 };
 
 /**
@@ -1741,7 +1736,7 @@ export function PlaybackPlayer({
       }
       const Hls = module.default;
       if (!Hls.isSupported()) {
-        onFailedRef.current(null);
+        onFailedRef.current({ kind: "engine" });
         return;
       }
       const hls = new Hls({
@@ -1757,7 +1752,7 @@ export function PlaybackPlayer({
       hls.attachMedia(video);
       hls.on(Hls.Events.ERROR, (_event, data) => {
         if (data.fatal) {
-          onFailedRef.current(hlsFailure(data, href));
+          onFailedRef.current({ kind: "hls", hls: hlsFailure(data, href) });
         }
       });
       destroy = () => {
@@ -1788,8 +1783,16 @@ export function PlaybackPlayer({
           src={useNativeSrc ? href : undefined}
           playsInline
           preload="metadata"
-          // 原生播放路径没有 hls.js 错误数据, 失败原因由探测结果说明.
-          onError={() => onFailedRef.current(null)}
+          // 原生播放路径没有 hls.js 错误数据, 失败原因取自媒体元素自身: 错误码与浏览器给出的 message 一并
+          // 交给调用方, "编码不受支持"与"取不到字节"只能在那里结合探测结果区分.
+          onError={(event) => {
+            const error = event.currentTarget.error;
+            onFailedRef.current({
+              kind: "media",
+              code: error?.code ?? null,
+              detail: error == null || error.message === "" ? null : error.message,
+            });
+          }}
         >
           <SubtitleTracks tracks={tracks} />
         </video>

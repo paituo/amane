@@ -129,6 +129,8 @@
     "playbackFailedHls": "This stream could not be played (player error {{details}}): {{url}}",
     "playbackFailedHlsWithStatus": "This stream could not be played (player error {{details}}, HTTP {{status}}): {{url}}",
     "playbackUnsupported": "This source's media type cannot play on this page",
+    "playbackCodecUnsupported": "This browser cannot decode the video codec of this stream (common with HEVC/H.265 and AV1). Try another stream or another source.",
+    "playbackConfigureExternal": "Configure external player",
     "playbackUnavailable": "This source is currently unavailable",
     "playbackUnavailableOption": "{{name}} (currently unavailable)",
     "playbackSourcesFailed": "Could not load playback sources",
