@@ -15,9 +15,14 @@
 
 | 工具 | 契约 |
 |------|------|
+| `search_media` | 按语义/剧情/关键词检索, 回**按相关度排序**的 metadata id + 番号/标题 + `mode` + `degraded`. `name` 不为空时顺带交付 metadata 预设 (行序即相关度顺序) |
 | `sql_explore` | 中间推理; 默认只回样例. `create_view=true` 物化会话内 SavedQuery 供 `inspect_result` 翻页 — 视图是**纯行数组**, 无 entity / `id` 列要求, **不**纳入交付结果 |
 | `sql_deliver` | 面向用户的结果 → `saved_query` + 内存结果缓存. `entity=metadata\|actor` 交付须含主键列 `id`, 可作片库 / 演员筛选并深链; 省略 entity (或 `data`) 交付任意只读结果, 只进入数据页 |
 | `inspect_result` | 按 `saved_query_id` 取行 (交付或探查视图) |
+
+**语义查询一律先走 `search_media`**, 不要用 SQL `LIKE` 模拟: 库内标题与剧情存的是**译文** (`plot` 已是中文, 见 [search.md](search.md)), 所以 `LIKE` 并非恒不命中, 但它只认字面 —— 同义改写会漏, 前导 `%` 走不了索引, 全表扫在万级库上必然撞超时, 且覆盖不到演员 / 标签 / 系列. 空结果只说明"没有这个字面片段", 不能据此断言库里没有. 检索栈经 `AgentRuntimeBridge.search` 取用 (返回当前实例, 不是构造时的那个 —— 检索随 `hot.search` 热重建), 未装配 / 开关全关时工具回 `error` 点明原因而不是空命中. `degraded` 为真表示语义路本该参与但没走成, 结果是关键词的 —— 模型须如实说明, 不能当作语义匹配. 交付保序由 `tools.ranked_metadata_sql` 把顺序写进 SQL 实现: Saved Query 的权威是 SQL, 只留在内存缓存里的话列表页重跑就丢了相关度顺序.
+
+语言: 库内标题与剧情是**译文** (本库中文), 既不是原始日文/英文措辞, 也不保证复用用户的说法. 不要把用户的问句先"翻译"成日文/英文关键词再检索, 直接把用户原话交给 `search_media`, 语义路负责抹平措辞差; 命中后按库内原文引号番号与标题, 用户要求时才译.
 
 写操作工具按域分组为 `Capability`, **不做延迟载入**: 每个请求都声明全部工具. 兼容端点 (DeepSeek 等) 没有「声明了但不开放」的通道, 逐次载入只能通过修改 `tools` 实现, 而工具定义渲染在 system 之后、对话之前, 每载入一次即重读整段对话前缀; 全量声明的固定前缀恒定不变, 首轮即命中缓存. 不经由 HTTP 自调用. `AgentDeps.bridge` 提供库路径边界 / watcher / 取消运行中任务.
 
@@ -54,6 +59,12 @@
 `schedule-ops` 创建时只接受 `RoutineSubmission`; 更新只允许 `name` / `cron` / `enabled`, 任务类型或 payload 变化须删除后重建. `trigger_schedule` 只把 `next_run` 设为当前时间, 实际 Task 由 `CronScheduler` 下一次 tick 创建, 不是同步执行.
 
 **批准流**: SQL 非法或 SQLite 运行时错误 → 工具返回 `error` 字符串, **不**升格为回合错误打断整轮. 慢查询 (`allow_slow`) 与破坏性写 (metadata / facet merge·delete·删规则 / 删库) 在工具体内 `raise ApprovalRequired`; 适配器把 `DeferredToolRequests` 映射成 AG-UI 中断 (`RUN_FINISHED.outcome.interrupts`), 中断 `id` 为 `int-{tool_call_id}`, 文案取自工具给的 metadata. 一次 `resume[]` 必须回答**全部**打开的中断, 故前端逐项暂存决定、集齐后整批提交, 批量批准即全部置 approve. 批准 → 工具体再次进入且 `tool_call_approved=True`; 拒绝 → `ToolDenied`. 模型只看见普通 tool return, **无**「用户已批准…」类附加说明; 刷新后用回放行末尾的中断还原待批状态. 
+
+**批准必须真的放宽预算**: 默认 `agent.sql_timeout_ms` (5 s) 与批准后的 `tools.APPROVED_SQL_TIMEOUT_MS` (30 s) 是两档, 由 `AgentDeps.timeout_for(allow_slow=...)` 选. 早先批准后仍按默认值执行, 慢查询在同一个上限处照样被打断 —— 那样批准就只是白点一次, 不是"我愿意等". 预算只对 `allow_slow` 生效: 普通探查不该拿到 30 s, 否则一次误写的全表扫描会白占线程半分钟.
+
+**子串扫描的例外**: 检索栈可用时, 含 `LIKE '%…%'` 的慢查询与超时**不进批准流**, 直接回 `error` 并指向 `search_media` (`tools.sql_failure_receipt`). 批准它只会换来一次用户交互加一次必然超时、且只认字面的全表扫描; 检索缺席时全表扫描是唯一手段, 此时保持原路径. 该判断只用于文案与这个分支, 不作安全校验 —— 沙箱的只读边界仍由连接态与 authorizer 构成.
+
+**SQL 失败回执要能一轮改对**: `no such column` / `no such table` 是模型自己写错了标识符, 正确答案是确定的, 因此 `tools.identifier_hint` 就地补一句真实落点 —— 概念冲突按 `_CONCEPT_COLUMNS` 表 (`description`/`synopsis`/`overview` → `metadata.plot`), 其余按 `schema_docs.tables_with_column` 指出列在哪个表, 完全不存在的列则让它回到 schema 摘要. 三段 (原始原因 / 纠错 / 换工具指引) 合成一条 `error`, 因为模型一轮只读一次回执, 拆字段会被只看到第一条. 背景: 线上日志里模型把剧情列写成 `description`, 沙箱只回 `no such column: description`, 模型无从知道该写 `plot`. 同一份日志里还有一个**不报错的错**: `content_type LIKE '%movie%'` —— 枚举列存的是成员名 (`CENSORED`), 而 `content_type` 根本没有 `movie` 这个取值, SQLite 又对 ASCII 大小写不敏感地 `LIKE`, 于是条件恒不命中却一声不响. 故 `schema_docs` 把片库相关表 (`metadata` / `media_files` / `actors` / `saved_queries`) 的枚举取值一并注入摘要, 并点明是**大写成员名**.
 
 ## 会话数据
 

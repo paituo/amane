@@ -904,8 +904,12 @@ class AgentConfig(BaseModel):
     ``Retry-After`` 时以它为准, 本值只作回退.
     """
 
-    sql_timeout_ms: int = Field(default=1000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
-    """只读 SQL 默认超时 (毫秒). 超过须用户批准放宽."""
+    sql_timeout_ms: int = Field(default=5_000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
+    """只读 SQL 默认超时 (毫秒). 超过须用户批准放宽, 批准后按 ``agent.tools.APPROVED_SQL_TIMEOUT_MS`` 执行.
+
+    1s 对本地万级表过紧: 一次没命中索引的聚合或子串扫描就要 2s 上下, 正常分析会反复走批准流,
+    而批准本身只换来更长的等待. 5s 让正常查询一次过, 仍挡得住失控的全表笛卡尔积.
+    """
 
     result_cache_ttl_s: int = Field(default=3600, ge=60, le=86_400, json_schema_extra={"x-hidden": True})
     """过期后按 SQL 重新执行."""

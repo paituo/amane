@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+import structlog
 from ag_ui.core import (
     BaseEvent,
     InputContent,
@@ -70,6 +71,8 @@ from ...agent.usage import request_usage, turn_usage_from_run
 from ...db.models import AgentSessionStatus
 from ..deps import AgentDep, RepoDep, RuntimeDep
 from ..models.agent import AgentCancelResponse
+
+logger = structlog.get_logger()
 
 router = APIRouter(tags=["agent"])
 
@@ -349,6 +352,10 @@ async def run_agent_agui(
             raise
         except Exception as exc:
             save_interrupted_turn()
+            # 回放行只留 str(exc) 一行, 而异常常常是一句对事后排查毫无落点的话 (例如
+            # "'async_generator' object does not support the asynchronous context manager protocol"):
+            # events.jsonl 里既没有栈也没有类型. 栈只进服务端日志, 不回送给页面.
+            logger.exception("agent_turn_failed", session_id=session_id, error=repr(exc))
             await store.append_row(AguiEventRow(type="agui", event={"type": "RUN_ERROR", "message": str(exc)}))
             await store.append_row(ErrorRow(type="error", message=str(exc)))
             await store.append_row(no_approvals())

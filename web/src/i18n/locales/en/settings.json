@@ -840,7 +840,7 @@
       },
       "sql_timeout_ms": {
         "label": "Query timeout (ms)",
-        "description": "Default timeout for queries that run without approval; queries that exceed it need user approval"
+        "description": "Default timeout for queries that run without approval; queries exceeding it need user approval, which raises the budget to 30 seconds"
       },
       "result_cache_ttl_s": {
         "label": "Result cache duration (s)",

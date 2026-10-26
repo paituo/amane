@@ -282,6 +282,8 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
     agent_service.bridge.watcher = watcher_service
     agent_service.bridge.cancel_running_task = runtime.cancel_task
     agent_service.bridge.poll_feed = feed_service.poll_one
+    # 检索栈随 hot.search 重建, 故每次都从 runtime 取当前实例而不是持有它
+    agent_service.bridge.search = lambda: runtime.search.service if runtime.search is not None else None
 
     logger.info("amane service ready")
     return AppSession(
