@@ -76,6 +76,12 @@ descriptor 声明来源能力、支持的内容类型、语言、访问 URL、`t
 
 `SourceError.detail` 会原样进入 502 响应体并展示给终端用户, 不允许在其中写入上游 URL、密钥或签名参数. 路由层的 `source_id` 只限制长度, 第三方 ID 的命名空间规则只在 descriptor 加载期执行.
 
+## 本机播放
+
+`local_playback` 是第三种能力 (与 `PLAYBACK` 并列, 设计与实测见 [local-playback.md](local-playback.md)): 它不产出任何码流, 只声明「用哪个程序、按什么顺序打开哪些文件」, 由主机执行拉起动作. 与播放源分开的理由是副作用 — 拉起动作只发生在明确的 `POST /api/local-playback/{id}/launch` 上, 不挂在 `probe` / `resolve` 这些会被重试与预取的只读钩子上.
+
+插件侧只有两个方法: `status()` 说明本机播放当前是否可用 (与条目无关, 前端据此决定是否渲染封面入口), `plan(query)` 给出 `executable` / `argv` / `files`. `executable` 为 `None` 表示交回系统关联程序, 此时只能开单文件; 非空时可传命令行参数, 多个文件经 `/localplay/{token}.m3u` 交给播放器自行拉取. 目标文件必须是 `query.files` 的子集, 主机在拉起前再按索引校验一次. 该能力的插件不进 `CrawlerFactory`, 也不出现在播放源列表里.
+
 ## 网络和运行时
 
 插件通过 `PluginContext` 得到共享 `HttpClient`、`WebClient` 和 `data_dir`. 使用共享客户端是契约的一部分: 插件请求必须遵守 Amane 的代理、重试、Host 限速和任务 HTTP 记录. HTML 用 `http_client.get_html` (拦截页抛 `SourceError`), JSON API 用 `get_json`. `data_dir` 是 `{cold.data_dir}/plugins/<plugin_id>`, 插件不允许写入该目录之外. 插件短 JSON 仍经由 `context.http_client`; 需要输出本机文件时声明 `file` 目标由主机打开, 插件不自行读盘.
