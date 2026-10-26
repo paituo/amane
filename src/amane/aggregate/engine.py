@@ -251,8 +251,15 @@ async def _report_progress(
 
 
 def _resolve_scalars(graph: FetchGraph, state: ExecutionState) -> None:
-    """沿字段链取第一个非空值. 链上仍有未处理节点时中断该字段, 不取后面已返回的站."""
+    """标量字段沿字段链取第一个非空值. 链上仍有未处理节点时中断该字段, 不取后面已返回的站.
+
+    ``ACTORS`` 例外: 演员名单跨字段链所有已抓源取并集 (高优先级女优源不再整份覆盖
+    后续男优源), 且每次调用都按当前已抓源重算, 使延迟段 (deferred) 的后续源也能并入.
+    """
     for field in SCALAR_FIELDS:
+        if field == MetadataField.ACTORS:
+            _resolve_actors_union(graph, state)
+            continue
         if field in state.result.field_sources:
             continue
         for node in graph.field_chains[field]:
@@ -265,6 +272,32 @@ def _resolve_scalars(graph: FetchGraph, state: ExecutionState) -> None:
             if getattr(data, field, None):
                 _fill_scalar(state.result, field, data, cache_key)
                 break
+
+
+def _resolve_actors_union(graph: FetchGraph, state: ExecutionState) -> None:
+    """演员名单跨字段链所有已抓源取并集.
+
+    链上仍有未处理节点 (尚未抓取) 时中断, 等待该站返回后再合并; 已抓源则全部并入.
+    合并顺序沿用字段链优先级, 同名去重后保留先入者, 性别未知可被子源升级
+    (见 ``_fill_actor_genders``). 因此 dmm 的纯女优名单与 javdb 含男优的名单共存.
+    """
+    collected: list[FilmActor] = []
+    seen_sources: list[SourceKey] = []
+    for node in graph.field_chains[MetadataField.ACTORS]:
+        cache_key = node.cache_key
+        if cache_key not in state.fetched:
+            break
+        data = state.fetched[cache_key]
+        if data is None:
+            continue
+        if data.actors:
+            collected.extend(item.model_copy() for item in data.actors)
+            if cache_key not in seen_sources:
+                seen_sources.append(cache_key)
+    if not collected:
+        return
+    state.result.actors = _dedupe_film_actors(collected)
+    state.result.field_sources[MetadataField.ACTORS] = seen_sources[0]
 
 
 def _resolve_lang(
