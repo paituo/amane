@@ -885,8 +885,12 @@ class AgentConfig(BaseModel):
     """整回合墙钟上限 (秒), 由路由侧 ``asyncio.timeout`` 包住整个回合, 到点终止并为超时单独收尾. None 表示不设上限. 不用 ``run_stream(timeout=)``: 其到点抛的 ``RunTimedOut`` 继承 ``RunCancelled``, 会被当成用户主动取消."""
 
     rate_limit: float = Field(default=2.0, ge=0.1, le=100)
-    sql_timeout_ms: int = Field(default=1000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
-    """只读 SQL 默认超时 (毫秒). 超过须用户批准放宽."""
+    sql_timeout_ms: int = Field(default=5_000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
+    """只读 SQL 默认超时 (毫秒). 超过须用户批准放宽, 批准后按 ``agent.tools.APPROVED_SQL_TIMEOUT_MS`` 执行.
+
+    原为 1000ms, 对本地万级表过紧: 一次没命中索引的聚合或子串扫描就要 2s 上下, 正常分析会反复
+    走批准流, 而批准本身只换来更长的等待. 5s 让正常查询一次过, 仍挡得住失控的全表笛卡尔积.
+    """
 
     result_cache_ttl_s: int = Field(default=3600, ge=60, le=86_400, json_schema_extra={"x-hidden": True})
     """过期后按 SQL 重新执行."""

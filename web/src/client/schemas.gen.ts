@@ -829,7 +829,7 @@ export const AgentConfigSchema = {
             maximum: 60000,
             minimum: 50,
             title: 'Sql Timeout Ms',
-            default: 1000,
+            default: 5000,
             'x-hidden': true
         },
         result_cache_ttl_s: {
@@ -3533,7 +3533,7 @@ export const HotSettingsSchema = {
                 max_tokens: 128000,
                 request_timeout: 600,
                 rate_limit: 2,
-                sql_timeout_ms: 1000,
+                sql_timeout_ms: 5000,
                 result_cache_ttl_s: 3600,
                 result_cache_max_entries: 64,
                 history_ttl_s: 3600,
