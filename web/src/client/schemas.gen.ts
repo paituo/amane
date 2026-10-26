@@ -8477,6 +8477,22 @@ export const SearchConfigSchema = {
     description: '检索开关与参数. 三个开关正交, 全关等价于旧行为.'
 } as const;
 
+export const SearchFieldSchema = {
+    type: 'string',
+    enum: [
+        'number',
+        'title',
+        'plot',
+        'actors',
+        'tags',
+        'series',
+        'studio',
+        'publisher'
+    ],
+    title: 'SearchField',
+    description: '可检索字段. 值即 FTS5 列名, 两者必须一致; 与 ``SearchMode`` 同因放在此处.'
+} as const;
+
 export const SearchModeSchema = {
     type: 'string',
     enum: [
@@ -8487,6 +8503,17 @@ export const SearchModeSchema = {
     ],
     title: 'SearchMode',
     description: '本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.\n\n定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方\n(路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed).'
+} as const;
+
+export const SearchTypeSchema = {
+    type: 'string',
+    enum: [
+        'keyword',
+        'vector',
+        'hybrid'
+    ],
+    title: 'SearchType',
+    description: '调用方请求的检索方式. 只能收窄配置已开启的路, 不能凭请求打开关掉的路.'
 } as const;
 
 export const SelectionNoticeResponseSchema = {

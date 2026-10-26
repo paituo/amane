@@ -27,6 +27,14 @@ async def _seed_library(repo: Repository) -> None:
 
 class TestMetadataHttp:
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_list_accepts_search_options(self, client: AsyncClient):
+        """检索方式与字段范围是可选查询参数; 枚举外的取值走 422."""
+        listed = await client.get("metadata?search_type=keyword&search_fields=title&search_fields=plot")
+        assert listed.status_code == 200
+        assert (await client.get("metadata?search_type=bogus")).status_code == 422
+        assert (await client.get("metadata?search_fields=bogus")).status_code == 422
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_list_phase_comes_from_number_without_files(self, client: AsyncClient, repo: Repository):
         """有码 / 无码取番号类别: 没有挂载文件也亮, 无码再并上文件的无码标记."""
         uncensored = await repo.upsert_metadata(number="HEYZO-1234")

@@ -4389,6 +4389,13 @@ export type SearchConfig = {
 };
 
 /**
+ * SearchField
+ *
+ * 可检索字段. 值即 FTS5 列名, 两者必须一致; 与 ``SearchMode`` 同因放在此处.
+ */
+export type SearchField = 'number' | 'title' | 'plot' | 'actors' | 'tags' | 'series' | 'studio' | 'publisher';
+
+/**
  * SearchMode
  *
  * 本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.
@@ -4397,6 +4404,13 @@ export type SearchConfig = {
  * (路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed).
  */
 export type SearchMode = 'like' | 'keyword' | 'vector' | 'hybrid';
+
+/**
+ * SearchType
+ *
+ * 调用方请求的检索方式. 只能收窄配置已开启的路, 不能凭请求打开关掉的路.
+ */
+export type SearchType = 'keyword' | 'vector' | 'hybrid';
 
 /**
  * SelectionNoticeResponse
@@ -5996,6 +6010,18 @@ export type ListMetadataData = {
          * Search
          */
         search?: string | null;
+        /**
+         * Search Type
+         *
+         * Requested search path; narrows enabled ones only
+         */
+        search_type?: SearchType | null;
+        /**
+         * Search Fields
+         *
+         * Keyword-path fields to search; omit for all. Vector path ignores it
+         */
+        search_fields?: Array<SearchField> | null;
         /**
          * Offset
          */

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from amane.config.manager import EmbeddingConfig, FusionConfig, SearchConfig, VectorEngine
-from amane.enums import SearchMode
+from amane.enums import SearchField, SearchMode, SearchType
 from amane.search import (
     EmbeddingError,
     EmbeddingProvider,
@@ -92,17 +92,49 @@ class StubProvider:
 
 
 def _make_db(path: Path) -> None:
-    """LIKE 回退要读业务表, 因此建一份最小 metadata."""
+    """LIKE 回退要读业务表, 因此建一份最小 metadata (含实体列, 单字回退会按所选落到它们上面)."""
     conn = sqlite3.connect(path)
     conn.execute(
-        "CREATE TABLE metadata(id INTEGER PRIMARY KEY, number TEXT, title TEXT, plot TEXT, actors TEXT, tags TEXT)"
+        "CREATE TABLE metadata("
+        "id INTEGER PRIMARY KEY, number TEXT, title TEXT, plot TEXT, actors TEXT, tags TEXT,"
+        " series TEXT, studio TEXT, publisher TEXT)"
     )
     conn.executemany(
-        "INSERT INTO metadata VALUES (?,?,?,?,?,?)",
+        "INSERT INTO metadata VALUES (?,?,?,?,?,?,?,?,?)",
         [
-            (1, "SSIS-001", "新人看護師の優しい手ほどき", "病院で働く看護師", "三上悠亜", "単体作品"),
-            (2, "SSIS-497", "巨乳人妻の濃厚な性交", "人妻が溺れていく", "深田えいみ", "人妻"),
-            (3, "FC2-PPV-1234567", "素人娘 湘南の海で", "海辺のひと夏", "天海つばさ", "素人"),
+            (
+                1,
+                "SSIS-001",
+                "新人看護師の優しい手ほどき",
+                "病院で働く看護師",
+                "三上悠亜",
+                "単体作品",
+                "病院シリーズ",
+                "S1",
+                "S1",
+            ),
+            (
+                2,
+                "SSIS-497",
+                "巨乳人妻の濃厚な性交",
+                "人妻が溺れていく",
+                "深田えいみ",
+                "人妻",
+                "背徳シリーズ",
+                "S1",
+                "S1",
+            ),
+            (
+                3,
+                "FC2-PPV-1234567",
+                "素人娘 湘南の海で",
+                "海辺のひと夏",
+                "天海つばさ",
+                "素人",
+                "海辺シリーズ",
+                "FC2",
+                "FC2",
+            ),
         ],
     )
     conn.commit()
@@ -174,6 +206,40 @@ async def test_single_char_falls_back_to_like(tmp_path: Path) -> None:
     await store.aclose()
 
 
+#: (查询, 字段范围, 期望命中的 id 集合). 语料里 "人妻" 落在 title/plot/tags 上, 不在 actors 上.
+FIELD_CASES: list[tuple[str, list[SearchField], set[int]]] = [
+    ("人妻", [SearchField.TITLE], {2}),
+    ("人妻", [SearchField.PLOT], {2}),
+    ("人妻", [SearchField.TAGS], {2}),
+    ("人妻", [SearchField.ACTORS], set()),
+    ("SSIS-001", [SearchField.NUMBER], {1}),
+    ("SSIS-001", [SearchField.TITLE], set()),
+]
+
+
+@pytest.mark.parametrize(("query", "fields", "expected"), FIELD_CASES)
+async def test_keyword_search_respects_fields(
+    tmp_path: Path,
+    query: str,
+    fields: list[SearchField],
+    expected: set[int],
+) -> None:
+    store = await _store(tmp_path)
+    hits = await store.search_keyword(query, limit=10, fields=fields)
+    assert {hit.metadata_id for hit in hits} == expected
+    await store.aclose()
+
+
+async def test_like_fallback_respects_fields(tmp_path: Path) -> None:
+    """单字回退同样按已选范围扫: 勾了实体列就在实体列里找, 没有可扫的文本列才 0 命中."""
+    store = await _store(tmp_path)
+    assert {hit.metadata_id for hit in await store.search_keyword("海", limit=10, fields=[SearchField.TITLE])} == {3}
+    # "背" 只出现在 series 上: 这条断言证明回退真的落在了所选列, 而不是退回四个自由文本列.
+    assert {hit.metadata_id for hit in await store.search_keyword("背", limit=10, fields=[SearchField.SERIES])} == {2}
+    assert await store.search_keyword("海", limit=10, fields=[SearchField.NUMBER]) == []
+    await store.aclose()
+
+
 async def test_keyword_search_empty_and_blank(tmp_path: Path) -> None:
     store = await _store(tmp_path)
     assert await store.search_keyword("", limit=10) == []
@@ -234,6 +300,69 @@ async def test_mode_matrix(tmp_path: Path, overrides: dict[str, object], expecte
     assert service.mode is expected
     result = await service.search("人妻", limit=5)
     assert result.mode is expected
+    await store.aclose()
+
+
+#: (配置覆盖, 请求模式, 期望 mode, 期望 degraded)
+REQUESTED_MODE_CASES: list[tuple[dict[str, object], SearchType, SearchMode, bool]] = [
+    # 两路都在: 请求即实际路径.
+    ({"keyword_enabled": True, "vector_enabled": True}, SearchType.KEYWORD, SearchMode.KEYWORD, False),
+    ({"keyword_enabled": True, "vector_enabled": True}, SearchType.VECTOR, SearchMode.VECTOR, False),
+    ({"keyword_enabled": True, "vector_enabled": True}, SearchType.HYBRID, SearchMode.HYBRID, False),
+    # 向量没开: 请求语义只能退回配置模式, 且必须标记为降级.
+    ({"keyword_enabled": True, "vector_enabled": False}, SearchType.VECTOR, SearchMode.KEYWORD, True),
+    ({"keyword_enabled": True, "vector_enabled": False}, SearchType.HYBRID, SearchMode.KEYWORD, True),
+    ({"keyword_enabled": True, "vector_enabled": False}, SearchType.KEYWORD, SearchMode.KEYWORD, False),
+    # 关键词没开: 请求关键字同样走不通, 退回向量并降级.
+    ({"keyword_enabled": False, "vector_enabled": True}, SearchType.KEYWORD, SearchMode.VECTOR, True),
+    ({"keyword_enabled": False, "vector_enabled": True}, SearchType.VECTOR, SearchMode.VECTOR, False),
+]
+
+
+@pytest.mark.parametrize(("overrides", "requested", "expected", "degraded"), REQUESTED_MODE_CASES)
+async def test_requested_mode_narrows_only(
+    tmp_path: Path,
+    overrides: dict[str, object],
+    requested: SearchType,
+    expected: SearchMode,
+    degraded: bool,
+) -> None:
+    """请求只能收窄: 关掉的路不因请求而打开."""
+    store = await _store(tmp_path)
+    service = _service(store, StubProvider(), **overrides)
+    result = await service.search("人妻", limit=5, mode=requested)
+    assert result.mode is expected
+    assert result.degraded is degraded
+    await store.aclose()
+
+
+async def test_requested_fields_narrow_keyword_path(tmp_path: Path) -> None:
+    store = await _store(tmp_path)
+    service = _service(store, StubProvider(), keyword_enabled=True, vector_enabled=False)
+    assert (await service.search("人妻", limit=5, fields=[SearchField.TITLE])).ids == [2]
+    assert (await service.search("人妻", limit=5, fields=[SearchField.ACTORS])).ids == []
+    await store.aclose()
+
+
+async def test_vector_path_ignores_fields(tmp_path: Path) -> None:
+    """一条影片只有一个向量 (整条 entry_text 的嵌入), 查询时切不出字段范围."""
+    store = await _store(tmp_path)
+    service = _service(store, StubProvider(), keyword_enabled=False, vector_enabled=True)
+    wide = await service.search("护士", limit=5)
+    narrow = await service.search("护士", limit=5, fields=[SearchField.ACTORS])
+    assert wide.mode is SearchMode.VECTOR
+    assert wide.ids[0] == 1
+    assert wide.ids == narrow.ids
+    await store.aclose()
+
+
+async def test_exact_number_layer_respects_fields(tmp_path: Path) -> None:
+    """排除 number 后精确层不再把真番号顶到最前."""
+    store = await _store(tmp_path)
+    provider = _FixedVectorProvider([0, 1, 0, 0, 0, 0, 0, 0])
+    service = _service(store, provider, keyword_enabled=False, vector_enabled=True)
+    assert (await service.search("SSIS-001", limit=5)).ids[0] == 1
+    assert (await service.search("SSIS-001", limit=5, fields=[SearchField.TITLE])).ids[0] == 2
     await store.aclose()
 
 

@@ -9,7 +9,7 @@ from ...aggregate import compute_merge_updates
 from ...db.models import Metadata, MetadataSortField, SavedQueryEntity, SortOrder, TaskType
 from ...db.repo_types import WriteMode
 from ...db.repos.media import file_phase_of
-from ...enums import SearchMode
+from ...enums import SearchField, SearchMode, SearchType
 from ...handlers import ScrapePayload
 from ...media import manual_crop_image
 from ...parsing import DEFINITION_VALUES, ContentType, Mosaic, summarize_file_phases
@@ -130,7 +130,13 @@ def _has_scope_filters(filters: MetadataFilters) -> bool:
     )
 
 
-async def _ranked_search(runtime: AppRuntime, query: str | None) -> SearchResult | None:
+async def _ranked_search(
+    runtime: AppRuntime,
+    query: str | None,
+    *,
+    search_type: SearchType | None,
+    search_fields: list[SearchField] | None,
+) -> SearchResult | None:
     """走索引时的候选 id (按相关度). 无索引或未启用时返回 None, 调用方退回子串扫描.
 
     一次取满召回窗口而不是只取 ``offset + limit``: ``SearchResult.total`` 是"窗口内命中数",
@@ -144,7 +150,12 @@ async def _ranked_search(runtime: AppRuntime, query: str | None) -> SearchResult
     # 写入是异步索引的, 这里等一小会儿换取"读己之写"; 积压太深就按现有索引返回.
     await stack.indexer.wait_idle(INDEX_WAIT_S)
     # 翻页深度不能超过召回窗口: 向量路只保证 window 内有序, 再往后没有可信顺序.
-    return await stack.service.search(query, limit=stack.service.recall_window)
+    return await stack.service.search(
+        query,
+        limit=stack.service.recall_window,
+        mode=search_type,
+        fields=search_fields,
+    )
 
 
 async def _ranked_page(
@@ -193,6 +204,13 @@ async def list_metadata(
     repo: RepoDep,
     runtime: RuntimeDep,
     search: Annotated[str | None, Query()] = None,
+    search_type: Annotated[
+        SearchType | None, Query(description="Requested search path; narrows enabled ones only")
+    ] = None,
+    search_fields: Annotated[
+        list[SearchField] | None,
+        Query(description="Keyword-path fields to search; omit for all. Vector path ignores it"),
+    ] = None,
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
     sort_by: Annotated[MetadataSortField, Query(description="Sort field")] = MetadataSortField.UPDATED_AT,
@@ -225,7 +243,7 @@ async def list_metadata(
     if saved_query_id is not None:
         id_subquery_sql = await resolve_saved_query_id_subquery(repo, saved_query_id, SavedQueryEntity.METADATA)
 
-    ranked = await _ranked_search(runtime, search)
+    ranked = await _ranked_search(runtime, search, search_type=search_type, search_fields=search_fields)
     filters = MetadataFilters(
         sort_by=sort_by,
         order=order,

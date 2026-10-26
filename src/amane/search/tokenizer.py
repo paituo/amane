@@ -9,9 +9,12 @@ bigram 索引上的**短语查询**等价于子串语义, 精度靠查询侧的�
 
 import re
 import unicodedata
+from collections.abc import Sequence
 from enum import StrEnum
 
 from pydantic import BaseModel, Field
+
+from ..enums import SearchField
 
 #: 汉字 + 平/片假名 + 半角片假名. 与 ``utils.language.KANA`` 口径一致, 此处并入汉字.
 _CJK_RUN = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff\uff66-\uff9d]+")
@@ -33,28 +36,39 @@ class SegmentKind(StrEnum):
     WORD = "word"
 
 
-class TokenField(StrEnum):
-    """可检索字段. 值即 FTS5 列名, 两者必须一致."""
-
-    NUMBER = "number"
-    TITLE = "title"
-    PLOT = "plot"
-    ACTORS = "actors"
-    TAGS = "tags"
-    SERIES = "series"
-    STUDIO = "studio"
-    PUBLISHER = "publisher"
-
-    @property
-    def is_text(self) -> bool:
-        """number 是标识符, 其余是自然语言."""
-        return self is not TokenField.NUMBER
-
-
-#: 查询文本会落到这些字段上 (number 单独走标识符路径).
-TEXT_FIELDS: tuple[TokenField, ...] = tuple(f for f in TokenField if f.is_text)
+#: 查询文本会落到这些字段上 (number 单独走标识符路径). 索引端按此顺序写列.
+TEXT_FIELDS: tuple[SearchField, ...] = tuple(f for f in SearchField if f.is_text)
 #: 出现在 FTS5 MATCH 列过滤里的文本列集合; 短语必须落在单列内部才成立.
 TEXT_COLUMN_SCOPE = "{" + " ".join(f.value for f in TEXT_FIELDS) + "}"
+#: 未指定字段范围时, 子串回退扫这些列 —— 与接入字段范围之前的口径一致 (自由文本列).
+#: 显式给了范围就按所选扫到底 (含 series / studio / publisher 这些实体列): 用户既然
+#: 只勾了厂牌, 单字查询也该在厂牌里找, 而不是静默 0 命中.
+DEFAULT_LIKE_COLUMNS: tuple[SearchField, ...] = (
+    SearchField.TITLE,
+    SearchField.PLOT,
+    SearchField.ACTORS,
+    SearchField.TAGS,
+)
+
+
+def selected_fields(fields: Sequence[SearchField] | None) -> tuple[SearchField, ...]:
+    """``None`` 表示不限 (全选). 返回顺序恒按 ``SearchField`` 声明序, 与传入顺序无关."""
+    if fields is None:
+        return tuple(SearchField)
+    return tuple(f for f in SearchField if f in fields)
+
+
+def column_scope(fields: Sequence[SearchField] | None) -> str | None:
+    """已选文本列的 FTS5 列过滤; 一个文本列都没选时为 None."""
+    texts = [f.value for f in selected_fields(fields) if f.is_text]
+    return "{" + " ".join(texts) + "}" if texts else None
+
+
+def like_columns(fields: Sequence[SearchField] | None) -> tuple[SearchField, ...]:
+    """子串回退实际要扫的已选列; 为空表示没有可扫的列, 此时不该产生回退计划."""
+    if fields is None:
+        return DEFAULT_LIKE_COLUMNS
+    return tuple(field for field in selected_fields(fields) if field.is_text)
 
 
 def normalize_number(text: str) -> str:
@@ -194,7 +208,7 @@ def _split_query(text: str) -> list[QueryPart]:
     return parts
 
 
-def plan_keyword(query: str) -> KeywordPlan:
+def plan_keyword(query: str, fields: Sequence[SearchField] | None = None) -> KeywordPlan:
     """把用户输入翻成 FTS5 执行计划.
 
     词项之间 AND; 单个词项内部, number 通道与文本通道是 OR —— 番号候选猜错只会多一次空查询,
@@ -203,10 +217,20 @@ def plan_keyword(query: str) -> KeywordPlan:
     分级:
       一级 number 取归一原子前缀, 文本取 bigram 短语;
       二级 number 退回分段 OR (仅在存在 ASCII 词项时), 文本不变.
+
+    ``fields`` 收窄检索范围: 未选中的列既不进列过滤, 也不进子串回退; ``None`` 为全选.
+    一个可用列都不剩时返回空计划 (调用方应得 0 命中, 而不是退回全字段扫描).
     """
     text = query.strip()
     if not text:
         return KeywordPlan()
+
+    scope = column_scope(fields)
+    number_ok = SearchField.NUMBER in selected_fields(fields)
+
+    def like_plan() -> KeywordPlan:
+        """单字等 FTS5 表达不了的查询回退子串扫描; 没有可扫的已选列时无计划."""
+        return KeywordPlan(like_fallback=text) if like_columns(fields) else KeywordPlan()
 
     parts = _split_query(text)
     if not parts:
@@ -214,7 +238,7 @@ def plan_keyword(query: str) -> KeywordPlan:
 
     # 单个 CJK 单字: bigram 表达不了, 直接回退子串扫描.
     if len(parts) == 1 and parts[0].kind is SegmentKind.CJK and len(parts[0].raw) < 2:
-        return KeywordPlan(like_fallback=parts[0].raw)
+        return KeywordPlan(like_fallback=parts[0].raw) if like_columns(fields) else KeywordPlan()
 
     tier1: list[str] = []
     tier2: list[str] = []
@@ -222,16 +246,19 @@ def plan_keyword(query: str) -> KeywordPlan:
     has_number = False
     for part in parts:
         phrase = _phrase(part)
-        text_expr = f"{TEXT_COLUMN_SCOPE} : ({phrase})" if phrase is not None else ""
+        text_expr = f"{scope} : ({phrase})" if scope is not None and phrase is not None else ""
         if part.is_number_candidate:
-            has_number = True
-            atomics.append(_number_atomic(part))
-            channels1 = [_number_atomic(part)]
+            if not number_ok and not text_expr:
+                continue
+            if number_ok:
+                has_number = True
+                atomics.append(_number_atomic(part))
+            channels1 = [_number_atomic(part)] if number_ok else []
             if text_expr:
                 channels1.append(text_expr)
             tier1.append("(" + " OR ".join(channels1) + ")")
             relaxed = _number_parts(part)
-            channels2 = [relaxed] if relaxed else []
+            channels2 = [relaxed] if number_ok and relaxed else []
             if text_expr:
                 channels2.append(text_expr)
             if channels2:
@@ -241,7 +268,7 @@ def plan_keyword(query: str) -> KeywordPlan:
             tier2.append(text_expr)
 
     if not tier1:
-        return KeywordPlan(like_fallback=text)
+        return like_plan()
 
     tiers = [" AND ".join(tier1)]
     if has_number:

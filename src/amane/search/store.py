@@ -27,8 +27,15 @@ import sqlite_vec
 import structlog
 from pydantic import BaseModel, Field
 
+from ..enums import SearchField
 from .embedding import pack_vector, unpack_vector
-from .tokenizer import TEXT_FIELDS, TokenField, index_number_tokens, index_text_tokens, plan_keyword
+from .tokenizer import (
+    TEXT_FIELDS,
+    index_number_tokens,
+    index_text_tokens,
+    like_columns,
+    plan_keyword,
+)
 
 logger = structlog.get_logger()
 
@@ -37,19 +44,19 @@ BUSY_TIMEOUT_MS = 30_000
 #: 向量库文件名; 与业务库同目录.
 VECTOR_DB_NAME = "search_vec.db"
 
-#: bm25 列权重, 顺序必须与 ``TokenField`` 声明顺序一致.
+#: bm25 列权重, 顺序必须与 ``SearchField`` 声明顺序一致.
 #: 番号最重 (标识符), 实体次之, 简介最轻 (长文本容易靠词频占优).
-_BM25_WEIGHTS: dict[TokenField, float] = {
-    TokenField.NUMBER: 8.0,
-    TokenField.TITLE: 3.0,
-    TokenField.PLOT: 1.0,
-    TokenField.ACTORS: 6.0,
-    TokenField.TAGS: 6.0,
-    TokenField.SERIES: 5.0,
-    TokenField.STUDIO: 5.0,
-    TokenField.PUBLISHER: 5.0,
+_BM25_WEIGHTS: dict[SearchField, float] = {
+    SearchField.NUMBER: 8.0,
+    SearchField.TITLE: 3.0,
+    SearchField.PLOT: 1.0,
+    SearchField.ACTORS: 6.0,
+    SearchField.TAGS: 6.0,
+    SearchField.SERIES: 5.0,
+    SearchField.STUDIO: 5.0,
+    SearchField.PUBLISHER: 5.0,
 }
-_BM25_ARGS = ", ".join(f"{_BM25_WEIGHTS[f]:g}" for f in TokenField)
+_BM25_ARGS = ", ".join(f"{_BM25_WEIGHTS[f]:g}" for f in SearchField)
 
 _FTS_TABLE = "metadata_fts"
 _EMBEDDING_TABLE = "metadata_embeddings"
@@ -178,7 +185,7 @@ class SearchStore:
 
     def _ensure_keyword_tables(self) -> None:
         conn = self._require_conn()
-        columns = ", ".join(f.value for f in TokenField)
+        columns = ", ".join(f.value for f in SearchField)
         # contentless_delete 省掉原文副本, 同时允许按 rowid 删除旧版本.
         conn.execute(
             f"CREATE VIRTUAL TABLE IF NOT EXISTS {_FTS_TABLE} USING fts5({columns}, content='', contentless_delete=1)"
@@ -268,8 +275,8 @@ class SearchStore:
 
     def _upsert_sync(self, entries: list[IndexEntry], model: str) -> int:
         conn = self._require_conn()
-        columns = ", ".join(f.value for f in TokenField)
-        placeholders = ", ".join("?" * (len(TokenField) + 1))
+        columns = ", ".join(f.value for f in SearchField)
+        placeholders = ", ".join("?" * (len(SearchField) + 1))
         with self._lock:
             try:
                 for entry in entries:
@@ -334,17 +341,28 @@ class SearchStore:
 
     # ---------------------------------------------------------------- 查询
 
-    async def search_keyword(self, query: str, *, limit: int) -> list[KeywordHit]:
+    async def search_keyword(
+        self,
+        query: str,
+        *,
+        limit: int,
+        fields: Sequence[SearchField] | None = None,
+    ) -> list[KeywordHit]:
         if limit <= 0:
             return []
-        return await asyncio.to_thread(self._search_keyword_sync, query, limit)
+        return await asyncio.to_thread(self._search_keyword_sync, query, limit, fields)
 
-    def _search_keyword_sync(self, query: str, limit: int) -> list[KeywordHit]:
-        plan = plan_keyword(query)
+    def _search_keyword_sync(
+        self,
+        query: str,
+        limit: int,
+        fields: Sequence[SearchField] | None,
+    ) -> list[KeywordHit]:
+        plan = plan_keyword(query, fields)
         if plan.is_empty:
             return []
         if plan.like_fallback is not None:
-            return self._like_fallback(plan.like_fallback, limit)
+            return self._like_fallback(plan.like_fallback, limit, like_columns(fields))
         for tier in plan.tiers:
             rows = self._match_rows(tier, limit)
             if rows:
@@ -395,16 +413,27 @@ class SearchStore:
         # SQLite 的 bm25 越小越相关, 取负得到"越大越好"的分数.
         return [KeywordHit(metadata_id=row[0], score=-float(row[1])) for row in cursor]
 
-    def _like_fallback(self, needle: str, limit: int) -> list[KeywordHit]:
+    def _like_fallback(
+        self,
+        needle: str,
+        limit: int,
+        columns: Sequence[SearchField],
+    ) -> list[KeywordHit]:
         """单字等 FTS5 无法表达的查询回退子串扫描.
 
-        只扫文本列; 计数型分数没有意义, 统一给 0, 由融合侧按"词命中"处理.
+        只扫 ``columns`` (调用方按已选范围给出); 计数型分数没有意义, 统一给 0,
+        由融合侧按"词命中"处理.
         """
+        if not columns:
+            return []
         conn = self._require_conn()
         pattern = f"%{needle}%"
-        clauses = " OR ".join(f"{column} LIKE ?" for column in ("title", "plot", "actors", "tags"))
+        clauses = " OR ".join(f"{column.value} LIKE ?" for column in columns)
         try:
-            cursor = conn.execute(f"SELECT id FROM metadata WHERE {clauses} LIMIT ?", (*([pattern] * 4), limit))
+            cursor = conn.execute(
+                f"SELECT id FROM metadata WHERE {clauses} LIMIT ?",
+                (*([pattern] * len(columns)), limit),
+            )
         except sqlite3.OperationalError as e:
             logger.warning("LIKE 回退失败", error=str(e))
             return []

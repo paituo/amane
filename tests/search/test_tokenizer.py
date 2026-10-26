@@ -6,12 +6,13 @@ import sqlite3
 
 import pytest
 
+from amane.enums import SearchField
 from amane.search.tokenizer import (
-    TokenField,
     index_number_tokens,
     index_text_tokens,
     normalize_number,
     plan_keyword,
+    selected_fields,
 )
 
 #: (输入, 期望归一形)
@@ -63,7 +64,7 @@ def test_index_text_tokens(raw: str, expected: list[str]) -> None:
 
 def test_token_field_order_matches_fts_columns() -> None:
     """bm25 权重按声明顺序对齐, 顺序变化会静默错位."""
-    assert [f.value for f in TokenField] == [
+    assert [f.value for f in SearchField] == [
         "number",
         "title",
         "plot",
@@ -109,6 +110,51 @@ def test_plan_keyword_splits_quote_into_separate_terms() -> None:
     assert '"ab"cd"' not in plan.tiers[0]
 
 
+def test_selected_fields_keeps_declared_order() -> None:
+    """列过滤的写法与传入顺序无关, 否则同一组字段会因勾选先后产生不同 SQL."""
+    assert selected_fields(None) == tuple(SearchField)
+    assert selected_fields([SearchField.PLOT, SearchField.TITLE]) == (SearchField.TITLE, SearchField.PLOT)
+
+
+#: (查询, 字段范围, 期望出现在列过滤里的列, 期望 like_fallback)
+FIELD_SCOPE_CASES: list[tuple[str, list[SearchField], str | None, str | None]] = [
+    ("人妻", [SearchField.TITLE], "{title}", None),
+    ("人妻", [SearchField.TITLE, SearchField.PLOT], "{title plot}", None),
+    ("SSIS-001", [SearchField.TITLE], "{title}", None),
+    ("SSIS-001", [SearchField.NUMBER], "{number}", None),
+    # 一个可用通道都不剩: 空计划, 不退化成全字段扫描.
+    ("人妻", [SearchField.NUMBER], None, None),
+    # 单字回退只扫已选文本列; 缺省范围与接入字段范围之前一致 (四个自由文本列).
+    ("海", [SearchField.TITLE], None, "海"),
+    # 显式只勾实体列时, 回退就落在实体列上, 而不是静默 0 命中.
+    ("海", [SearchField.SERIES], None, "海"),
+    # 只勾 number 没有可扫的文本列: 空计划.
+    ("海", [SearchField.NUMBER], None, None),
+]
+
+
+@pytest.mark.parametrize(("query", "fields", "scope", "like_fallback"), FIELD_SCOPE_CASES)
+def test_plan_keyword_respects_field_scope(
+    query: str,
+    fields: list[SearchField],
+    scope: str | None,
+    like_fallback: str | None,
+) -> None:
+    plan = plan_keyword(query, fields)
+    assert plan.like_fallback == like_fallback
+    if scope is None:
+        assert plan.tiers == []
+        return
+    assert scope in plan.tiers[0]
+
+
+def test_plan_keyword_drops_number_channel_when_field_excluded() -> None:
+    """number 通道与精确探针都随该字段一起消失."""
+    assert plan_keyword("SSIS-001").number_exact is not None
+    assert plan_keyword("SSIS-001", [SearchField.TITLE]).number_exact is None
+    assert "{number}" not in plan_keyword("SSIS-001", [SearchField.TITLE]).tiers[0]
+
+
 def test_plan_keyword_rejects_only_punctuation() -> None:
     """纯分隔符切不出词项: 返回空计划, 不退化成"用标点做子串扫描"."""
     plan = plan_keyword("---")
@@ -119,7 +165,7 @@ def test_plan_keyword_rejects_only_punctuation() -> None:
 
 def _fts() -> sqlite3.Connection:
     con = sqlite3.connect(":memory:")
-    columns = ", ".join(f.value for f in TokenField)
+    columns = ", ".join(f.value for f in SearchField)
     con.execute(f"CREATE VIRTUAL TABLE fts USING fts5({columns}, content='', contentless_delete=1)")
     corpus = [
         (1, "SSIS-001", "巨乳人妻の濃厚な性交", ""),
@@ -128,7 +174,7 @@ def _fts() -> sqlite3.Connection:
     ]
     for metadata_id, number, title, plot in corpus:
         con.execute(
-            f"INSERT INTO fts(rowid, {columns}) VALUES ({', '.join('?' * (len(TokenField) + 1))})",
+            f"INSERT INTO fts(rowid, {columns}) VALUES ({', '.join('?' * (len(SearchField) + 1))})",
             (
                 metadata_id,
                 " ".join(index_number_tokens(number)),

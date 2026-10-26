@@ -915,6 +915,45 @@
             }
           },
           {
+            "name": "search_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/SearchType"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Requested search path; narrows enabled ones only",
+              "title": "Search Type"
+            },
+            "description": "Requested search path; narrows enabled ones only"
+          },
+          {
+            "name": "search_fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchField"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Keyword-path fields to search; omit for all. Vector path ignores it",
+              "title": "Search Fields"
+            },
+            "description": "Keyword-path fields to search; omit for all. Vector path ignores it"
+          },
+          {
             "name": "offset",
             "in": "query",
             "required": false,
@@ -14856,6 +14895,21 @@
         "title": "SearchConfig",
         "description": "检索开关与参数. 三个开关正交, 全关等价于旧行为."
       },
+      "SearchField": {
+        "type": "string",
+        "enum": [
+          "number",
+          "title",
+          "plot",
+          "actors",
+          "tags",
+          "series",
+          "studio",
+          "publisher"
+        ],
+        "title": "SearchField",
+        "description": "可检索字段. 值即 FTS5 列名, 两者必须一致; 与 ``SearchMode`` 同因放在此处."
+      },
       "SearchMode": {
         "type": "string",
         "enum": [
@@ -14866,6 +14920,16 @@
         ],
         "title": "SearchMode",
         "description": "本次列表检索实际走的路径. 出现在响应里, 调用方据此解释 ``total`` 语义.\n\n定义在此而非 ``search``: 它是 API 契约的一部分, 不该让只用枚举的调用方\n(路由与响应模型) 连带引入检索栈 (含可选依赖 fastembed)."
+      },
+      "SearchType": {
+        "type": "string",
+        "enum": [
+          "keyword",
+          "vector",
+          "hybrid"
+        ],
+        "title": "SearchType",
+        "description": "调用方请求的检索方式. 只能收窄配置已开启的路, 不能凭请求打开关掉的路."
       },
       "SelectionNoticeResponse": {
         "properties": {

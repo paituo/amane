@@ -3,6 +3,9 @@
 三个开关正交 (见 ``config.SearchConfig``), 全关时 ``mode`` 为 ``LIKE``, 调用方应退回原有的
 子串扫描, 行为与未接入检索时完全一致.
 
+调用方可在开关已开启的范围内**收窄**: 指定本次走哪条路 (``SearchType``) 与关键词路查哪些字段
+(``SearchField``). 收窄之外的部分仍由配置决定 —— 关掉的路不因请求而打开.
+
 融合口径来自 DigUp: 余弦相似度在本次查询的候选集内归一成 z 分数, ``zgate`` 决定"语义要多突出
 才算命中", 不达标的候选不参与排名而不是硬塞低分; 关键词命中另给固定加分 —— 番号、人名这类
 精确实体不能被语义门控滤掉.
@@ -15,7 +18,7 @@ import structlog
 from pydantic import BaseModel, Field
 
 from ..config.manager import SearchConfig, VectorEngine
-from ..enums import SearchMode
+from ..enums import SearchField, SearchMode, SearchType
 from .embedding import EmbeddingProvider, WarmableProvider
 from .store import KeywordHit, SearchStore, VectorHit
 
@@ -27,6 +30,13 @@ KEYWORD_WINDOW = 1000
 #: 首个查询等待模型就绪的上限. 下载/加载已由配置启用时的预热提前发起,
 #: 这里只兜"启用与查询几乎同时发生"的短窗口 —— 超过就降级, 不能让请求陪着下载.
 READY_WAIT_S = 2.0
+
+#: 请求模式 → 实际路径. 三个值同名, 但类型不同: 请求是意图, 响应是事实.
+_REQUESTED_MODES: dict[SearchType, SearchMode] = {
+    SearchType.KEYWORD: SearchMode.KEYWORD,
+    SearchType.VECTOR: SearchMode.VECTOR,
+    SearchType.HYBRID: SearchMode.HYBRID,
+}
 
 
 class SearchResult(BaseModel):
@@ -107,37 +117,69 @@ class SearchService:
             return max(self._config.fusion.vector_k, 1)
         return KEYWORD_WINDOW
 
-    async def search(self, query: str, *, limit: int) -> SearchResult:
-        """按开关组合执行检索. ``limit`` 为返回条数上限."""
-        text = query.strip()
-        mode = self.mode
+    def _resolve(self, requested: SearchType | None) -> tuple[SearchMode, bool]:
+        """请求模式与可用能力的交集.
+
+        请求只能**收窄**不能扩张: 配置关掉的路不因请求而打开, 否则"关掉语义检索"这个开关
+        会被任意调用方绕过. 请求的路走不通时退回配置模式并置 ``degraded`` —— 调用方要能区分
+        "这就是关键字结果"与"想要语义但没走成".
+        """
         degraded = self._degraded()
-        if mode is SearchMode.LIKE:
+        if requested is None:
+            return self.mode, degraded
+        keyword = self._config.keyword_enabled
+        vector = self._config.vector_enabled and not degraded
+        available = {
+            SearchType.KEYWORD: keyword,
+            SearchType.VECTOR: vector,
+            SearchType.HYBRID: keyword and vector,
+        }[requested]
+        if available:
+            return _REQUESTED_MODES[requested], degraded
+        return self.mode, True
+
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        mode: SearchType | None = None,
+        fields: Sequence[SearchField] | None = None,
+    ) -> SearchResult:
+        """按开关组合与请求覆盖执行检索.
+
+        ``limit`` 为返回条数上限; ``mode`` 收窄路径; ``fields`` 收窄**关键词路**的字段范围
+        (``None`` 为全选). 向量路不受 ``fields`` 约束: 一条影片只有一个向量, 它是整条
+         ``entry_text`` 的嵌入, 查询时无法再按字段切分.
+        """
+        text = query.strip()
+        resolved, degraded = self._resolve(mode)
+        if resolved is SearchMode.LIKE:
             return SearchResult(mode=SearchMode.LIKE, degraded=degraded)
         if not text or limit <= 0:
-            return SearchResult(mode=mode, degraded=degraded)
+            return SearchResult(mode=resolved, degraded=degraded)
 
         # 精确番号层与关键词开关无关: 词索引始终维护, 探针只是一次受限 MATCH,
-        # 而纯向量模式没有它会把同厂牌近邻排在真番号前面.
-        exact_ids = await self._exact_ids(text, limit)
+        # 而纯向量模式没有它会把同厂牌近邻排在真番号前面. 字段范围不含 number 时同样跳过.
+        exact_ids = await self._exact_ids(text, limit, fields)
 
         keyword_hits: list[KeywordHit] = []
         if self._config.keyword_enabled:
             # 关键词路多取一些, 让融合有足够候选; 向量路的上限由 fusion.vector_k 控制.
-            keyword_hits = await self._store.search_keyword(text, limit=limit * 4)
+            keyword_hits = await self._store.search_keyword(text, limit=limit * 4, fields=fields)
 
-        if mode is SearchMode.KEYWORD:
+        if resolved is SearchMode.KEYWORD:
             ranked = self._exact_first(exact_ids, (hit.metadata_id for hit in keyword_hits))
-            return SearchResult(mode=mode, ids=ranked[:limit], total=len(ranked), degraded=degraded)
+            return SearchResult(mode=resolved, ids=ranked[:limit], total=len(ranked), degraded=degraded)
 
         vector_hits, vector_failed = await self._vector_hits(text)
         degraded = degraded or vector_failed
         if not vector_hits and vector_failed:
             ranked = self._exact_first(exact_ids, (hit.metadata_id for hit in keyword_hits))
             return SearchResult(mode=SearchMode.KEYWORD, ids=ranked[:limit], total=len(ranked), degraded=True)
-        if mode is SearchMode.VECTOR:
+        if resolved is SearchMode.VECTOR:
             ordered = self._exact_first(exact_ids, (hit.metadata_id for hit in vector_hits))
-            return SearchResult(mode=mode, ids=ordered[:limit], total=len(ordered), degraded=degraded)
+            return SearchResult(mode=resolved, ids=ordered[:limit], total=len(ordered), degraded=degraded)
         if not self._config.fused:
             # 两路各自排序后拼接去重: 关键词结果优先, 语义结果补齐.
             merged = self._exact_first(
@@ -147,13 +189,24 @@ class SearchService:
                     *(hit.metadata_id for hit in vector_hits),
                 ),
             )
-            return SearchResult(mode=mode, ids=merged[:limit], total=len(merged), degraded=degraded)
+            return SearchResult(mode=resolved, ids=merged[:limit], total=len(merged), degraded=degraded)
 
         fused = self._fuse(keyword_hits, vector_hits, exact_ids)
         return SearchResult(mode=SearchMode.HYBRID, ids=fused[:limit], total=len(fused), degraded=degraded)
 
-    async def _exact_ids(self, text: str, limit: int) -> list[int]:
-        """精确番号命中集. 探针失败不影响检索, 只是少了这一层的排序优势."""
+    async def _exact_ids(
+        self,
+        text: str,
+        limit: int,
+        fields: Sequence[SearchField] | None,
+    ) -> list[int]:
+        """精确番号命中集. 探针失败不影响检索, 只是少了这一层的排序优势.
+
+        字段范围不含 ``number`` 时整层跳过: 用户既然排除了番号列, 就不该再拿到"只因番号
+        命中"的结果.
+        """
+        if fields is not None and SearchField.NUMBER not in fields:
+            return []
         try:
             return await self._store.exact_number_ids(text, limit=limit)
         except Exception as e:

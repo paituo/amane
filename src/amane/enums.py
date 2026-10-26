@@ -214,3 +214,29 @@ class SearchMode(StrEnum):
     KEYWORD = "keyword"
     VECTOR = "vector"
     HYBRID = "hybrid"
+
+
+class SearchType(StrEnum):
+    """调用方请求的检索方式. 只能收窄配置已开启的路, 不能凭请求打开关掉的路."""
+
+    KEYWORD = "keyword"
+    VECTOR = "vector"
+    HYBRID = "hybrid"
+
+
+class SearchField(StrEnum):
+    """可检索字段. 值即 FTS5 列名, 两者必须一致; 与 ``SearchMode`` 同因放在此处."""
+
+    NUMBER = "number"
+    TITLE = "title"
+    PLOT = "plot"
+    ACTORS = "actors"
+    TAGS = "tags"
+    SERIES = "series"
+    STUDIO = "studio"
+    PUBLISHER = "publisher"
+
+    @property
+    def is_text(self) -> bool:
+        """number 是标识符, 其余是自然语言."""
+        return self is not SearchField.NUMBER

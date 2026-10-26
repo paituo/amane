@@ -7,6 +7,9 @@
 `search.tokenizer` 同时服务索引写入与查询构造. 两侧切分不一致时结果**恒为空**, 且不报错.
 改分词规则必须同时想清楚已经落库的索引 —— 旧 token 与新查询不再匹配, 需要重建.
 
+`SearchField` (值即 FTS5 列名) 定义在 `amane.enums`, 与 `SearchMode` 同因: 它进了 API 契约,
+只用枚举的调用方不该连带引入检索栈.
+
 字段分两类, 差别在**查询侧**而非索引侧:
 
 - `number` 是标识符: 索引存归一原子 (`ssis001`) 与分段词; 查询先试原子前缀, 无命中才退到分段.
@@ -50,6 +53,27 @@ FTS5 的 `tokenize` 是表级选项, **不支持逐列**, 逐字段策略只能�
 
 `SearchMode` 定义在 `amane.enums`, 不在 `search` 包内: 它是响应契约的一部分, 只用枚举的调用方
 (路由与响应模型) 不该连带引入检索栈.
+
+调用方还能按次收窄: `SearchService.search(mode=SearchType, fields=[SearchField, ...])`.
+`SearchService._resolve` 取**请求与可用能力的交集** —— 请求只收窄不扩张, 配置关掉的路不因请求
+而打开, 否则"关掉语义检索"这个开关能被任意调用方绕过. 请求的路走不通时退回配置模式并置
+`degraded`, 让调用方分得清"这就是关键字结果"与"想要语义但没走成".
+
+## 字段范围
+
+`fields` 收窄**关键词路**: 未选中的列既不进 FTS5 列过滤 (`tokenizer.column_scope`), 也不进单字
+的子串回退 (`tokenizer.like_columns`); 排除 `number` 时精确番号层一并跳过
+(`SearchService._exact_ids`). 什么都不剩时返回空计划 —— 那是 0 命中, 不是"退回全字段扫描".
+
+未传 `fields` (全选) 时, 子串回退仍只扫 `title / plot / actors / tags` 这四个自由文本列
+(`tokenizer.DEFAULT_LIKE_COLUMNS`), 与接入字段范围之前的口径一致; 一旦显式给了范围, 回退就严格
+按所选扫到底 (含 `series / studio / publisher`), 否则"只勾厂牌 + 单字"会静默 0 命中.
+
+**向量路不受 `fields` 约束.** 一条影片只有一个向量, 它是 `indexer.entry_text` (全部字段拼接) 的
+嵌入, 入库时就定死了; 查询侧没有按字段切分的余地. 要逐字段语义只能每个字段各存一个向量 (索引
+体积翻若干倍), 不做.
+
+无索引时的兜底 (`mode=LIKE`, 业务库子串扫描) 同样不读 `fields`: 那条路径本来就只扫 number + title.
 
 ## 可选依赖
 
@@ -115,7 +139,8 @@ vec0 缺条目由重建修复.
 
 ## 对外契约
 
-`GET /api/metadata?search=` 走检索时响应带两个字段:
+`GET /api/metadata?search=`, 另有 `search_type` (keyword / vector / hybrid) 与 `search_fields`
+(可重复, 省略为全选) 两个可选参数; 非法枚举值走 422. 走检索时响应带两个字段:
 
 - `search_mode`: 本次实际走的路径 (`like` / `keyword` / `vector` / `hybrid`). 前端与调用方靠它
   解释 `total` 语义, 不要自己猜.
