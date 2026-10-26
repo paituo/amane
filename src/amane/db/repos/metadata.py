@@ -111,6 +111,55 @@ def _merge_auto_locks(fields: MetadataFields, locked: set[MetadataField]) -> lis
     return [str(field) for field in MetadataField if field in locked | written]
 
 
+# AUTO 写路径 (upsert_metadata 已有行分支) 中空值不应覆盖既有非空值的列.
+# 源返回 None / 空串 / 空列表表示「此源无该数据」, 不等于「应将既有值清空」.
+_NULL_SAFE_COLUMNS = frozenset(
+    {
+        "title",
+        "plot",
+        "actors",
+        "directors",
+        "tags",
+        "series",
+        "studio",
+        "publisher",
+        "release",
+        "runtime",
+        "poster_urls",
+        "thumb_urls",
+        "trailer_urls",
+        "extrafanart_urls",
+        "scores",
+        "external_ids",
+    }
+)
+
+
+def _is_empty_overwrite(key: str, value: object, existing: Metadata) -> bool:
+    """AUTO 写路径空值防护: 源字段为空且既有行该列已有非空值时跳过覆盖.
+
+    背景: 男优批量 (javdb-only + use_cache=set() + translator=None) 走 upsert_metadata 整行重写,
+    当 javdb 未返回 plot / 返回日文 title 时, 直接 setattr 把既有中文 plot/title 洗成空/日文.
+    此处拦截「空覆盖非空」, 让重刮/补男优等 AUTO 任务不再破坏存量好数据.
+
+    - ``field_sources`` 永远不跳过: 它记录数据来源, 必须随每次写入刷新.
+    - 不在 ``_NULL_SAFE_COLUMNS`` 的列 (如 number / content_type / raw / locked_fields) 原样写入.
+    - 手工 MANUAL 写入 (update_metadata 显式赋值, 357-389 行) 不经此函数, 用户可主动清空.
+    """
+    if key == "field_sources":
+        return False
+    if key not in _NULL_SAFE_COLUMNS:
+        return False
+    current = getattr(existing, key, None)
+    if current is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() == ""
+    if isinstance(value, (list, tuple, set)):
+        return len(value) == 0
+    return value is None
+
+
 class MetadataRepoMixin(RepositoryMixinBase):
     index_sink: MetadataIndexSink | None
 
@@ -313,6 +362,9 @@ class MetadataRepoMixin(RepositoryMixinBase):
             if existing:
                 fields = _filter_locked(fields, _locked_fields_of(existing), existing.field_sources or {})
                 for key, value in fields.items():
+                    # 空值防护: 源缺失 (空/None) 不覆盖既有非空值. 见 _is_empty_overwrite.
+                    if _is_empty_overwrite(key, value, existing):
+                        continue
                     setattr(existing, key, value)
                 existing.updated_at = _utcnow()
                 session.add(existing)
