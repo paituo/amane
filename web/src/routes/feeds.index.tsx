@@ -69,7 +69,20 @@ function FeedsPage() {
         overflowX: "hidden",
       }}
     >
-      <Group justify="space-between" wrap="wrap" mb="sm">
+      {/* 吸顶: 外层 Box 自己就是滚动容器 (高度钉在 Main 内容区), 所以 top 取 0 而非顶栏高度.
+          间距用 pb 不用 mb —— mb 落在背景色之外, 标题行与内容之间会留出一条缝, 列表会从缝里透上来. */}
+      <Group
+        justify="space-between"
+        wrap="wrap"
+        pb="sm"
+        style={{
+          position: "sticky",
+          top: 0,
+          zIndex: 2,
+          flexShrink: 0,
+          backgroundColor: "var(--mantine-color-body)",
+        }}
+      >
         <Group gap="sm">
           <Button
             hiddenFrom="md"
