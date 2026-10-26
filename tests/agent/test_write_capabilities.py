@@ -31,7 +31,7 @@ from amane.db.repository import Repository
 from amane.enums import ApiType
 from amane.handlers.models import ScrapePayload
 from amane.llm import build_model
-from tests.agent.support import ToolCallContext, cap_toolset, tool_fn
+from tests.agent.support import ToolCallContext, cap_toolset, no_limit, tool_fn
 
 
 @pytest_asyncio.fixture
@@ -53,7 +53,7 @@ async def write_deps(tmp_path: Path, repo: Repository) -> AgentDeps:
 
 
 def test_build_agent_wires_all_write_capabilities() -> None:
-    agent = build_agent(AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"))
+    agent = build_agent(AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"), no_limit())
     assert agent is not None
     ids = {getattr(c, "id", None) for c in agent.root_capability.capabilities}
     assert {
@@ -308,7 +308,9 @@ async def test_write_tools_declared_up_front(write_deps: AgentDeps, api_type: Ap
         payloads.append(json.loads(request.content))
         return httpx2.Response(200, json=_DONE[api_type])
 
-    agent = build_agent(AgentConfig(api_key="sk-test", model="deepseek-flash", base_url="https://api.deepseek.com"))
+    agent = build_agent(
+        AgentConfig(api_key="sk-test", model="deepseek-flash", base_url="https://api.deepseek.com"), no_limit()
+    )
     assert agent is not None
     async with httpx2.AsyncClient(transport=httpx2.MockTransport(handler)) as client:
         model = build_model(

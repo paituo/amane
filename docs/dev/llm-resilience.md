@@ -6,7 +6,7 @@
 
 ## 传输层重试
 
-`agent.max_retries` 是首次请求之外的重试次数, 经 `agent/runtime.py::resolve_model_settings` 写进 `ModelSettings['max_retries']` 按请求下发: 取值 `N` 时一次被限流的请求实发 `N + 1` 次, `0` 表示只发一次. 默认 `None` 表示不传该键, 沿用各 SDK 客户端自身的重试配置 (OpenAI 默认两次).
+`agent.max_retries` 是首次请求之外的重试次数, 经 `agent/runtime.py::resolve_model_settings` 写进 `ModelSettings['max_retries']` 按请求下发: 取值 `N` 时一次被限流的请求实发 `N + 1` 次, `0` 表示只发一次. 默认 `0`: SDK 退避是亚秒级, 对按分钟窗口的 token 限额几乎无效, 撞限流继续重发只是白烧配额; 等待改由 `agent.tpm_limit` 与 `agent.rate_limit_cooldown_s` 在请求前完成. 填 `None` 表示不传该键, 沿用各 SDK 客户端自身的重试配置 (OpenAI 默认两次).
 
 约束:
 
@@ -18,7 +18,11 @@
 
 ## 助理回合
 
-- **限速**: `agent.rate_limit` 经 `_RateLimitCapability` 在每次模型请求前 `acquire` (桶容量 1, 严格平滑). 桶由 `AgentService.request_limiter()` 在所有会话间共享, `rate_limit` 变化时换新桶; 不得改为每回合新建, 并发会话各自放行时上游看到的速率是配置值的数倍.
+- **限速**: 频率 / token 预算 / 限流冷却三项合成 `agent/limits.py::AgentRateLimiter`, 由 `agent/runtime.py::RateLimitedModel` 包在 model 上 (`AgentService.request_limiter()`, `rate_limit` / `tpm_limit` / `rate_limit_cooldown_s` 任一变化时换新实例). 全部会话与会话标题请求共用同一份状态; 不得改为每回合新建, 并发会话各自放行时上游看到的速率是配置值的数倍. **挂在 model 而不是回合能力上**: 会话标题 (`agent/naming.py`) 不经过 agent 回合, 只有包在 model 上它才与回合同桶.
+  - 频率: `agent.rate_limit` (每秒请求数), 桶容量 1, 严格平滑.
+  - token 预算: `agent.tpm_limit` (输入 + 输出, 每分钟滑动窗口), `None` 表示不按 token 限速. 请求前按估算预扣, 响应后按上游真实用量校正; 上游不回用量时保留估算. 估算口径: 正文按字符折算 (中日文 1.5 字/token、西文 4 字符/token), **工具声明与 `instruction_parts` 按 `ModelRequestParameters` 的实际内容逐次全额计入** (能力的工具在运行时才并入, 写死常量估不出), 另加 200 token 信封开销; 并且不低于上一轮实测的 input (历史只增不减). 超预算即等到窗口滑出再发, 不等到撞 429. 只限请求数防不住按 token 计量的上游: 助理全量声明工具, 光 explore 三个工具的参数 schema 就有两万字符.
+  - 冷却: 收到 `ModelRateLimitError` (429) 后 `agent.rate_limit_cooldown_s` 秒内不放行任何请求 (含会话标题); 上游给了 `Retry-After` 时以它为准, 本值只作回退. 冷却不重发请求, 重试仍归 SDK 与本侧回合之外.
+  - **`request_stream` 必须是上下文管理器, 不是裸 async generator**: `Model.request_stream` 的契约定在基类 (`models/__init__.py::Model` 与 `models/wrapper.py::WrapperModel`) 且全部 18 个 provider 实现都带 `@asynccontextmanager`. 包装器漏掉该装饰器时, 上游一旦按契约 `async with` 进入即报 `'async_generator' object does not support the asynchronous context manager protocol (missed aexit method)` —— 会话标题 (`direct.model_request` 经 `model_request_stream`, 返回 `AbstractAsyncContextManager`) 与 agent 回合都会中招, 而错误只被 `naming.py` 吞成一行 `session title request failed`. 单测若也用 `async for` 消费, 实现与测试错得一致, 照样全绿; 故 `tests/agent/test_limits.py` 一律 `async with`, 并留 `test_request_stream_is_context_manager` 作契约守卫.
 - **墙钟上限**: `agent.request_timeout` (秒) 由 `agent_agui.consume()` 以 `asyncio.timeout` 包住整个回合, 到点写超时错误行并终止; `None` 表示不设上限. **不得改用 `run_stream(timeout=)`**: 它到点抛 `RunTimedOut`, 而该类继承 `RunCancelled`, 适配器按取消处理 (发 `RUN_CANCELLED` 而非 `RUN_ERROR`), 页面会把超时显示成用户主动取消.
 - **请求上限**: `agent/runtime.py::AGENT_USAGE_LIMITS` 的 `request_limit` 限制单回合请求次数. `Agent.retries` 是工具与输出校验的重试预算 (预算 `N` 对应实发 `N + 1` 次请求), 与请求上限是两道独立约束, 两者都不得取消上限.
 - **单次请求超时**: 助理不传 `http_client`, 取 pydantic-ai 默认值; 翻译 60 秒、会话标题 15 秒、自检真实回合 180 秒由本侧各自设定.
@@ -32,6 +36,12 @@
 | 会话标题 | 回退首条输入截断 |
 | 翻译 | 返回 `None`, 刮削保留源语言值并记 warning; 译文不写入缓存, 下次刮削仍会请求 |
 | 端点自检 | 限流与凭据缺失同级判为 error, 真实回合超时只判 warn |
+
+## 限流后的客户端状态
+
+`RUN_ERROR` 是回合终态, 服务端不会为它补 `RUN_FINISHED` (那会把失败回合伪装成已完成). 但 `@ag-ui/client` 的未决中断 (`AbstractAgent.pendingInterrupts`) **只在 `RUN_FINISHED` 时重置**: 一次「审批 → 续批时撞 429」之后, 中断留在客户端, 而服务端已写空 `approvals` 并置回 `ACTIVE`, 两侧不一致 —— 用户再输入, 请求在发出前就被 `onInitialize` 拦下, 报 `Thread has N pending interrupt(s) not addressed by resume`. 该报错由客户端抛出, 服务端日志里没有对应记录.
+
+对齐由前端负责, 真源是回放行 (`agent-home.tsx::syncPendingInterrupts`): 收到 `RUN_ERROR` 立即清空; 每次用回放行重建运行时话题本时按折叠结果重设 (有未决审批则按原清单重设, id 不变故续批照常). **不要在服务端为错误回合补 `RUN_FINISHED`**.
 
 ## 失败回合的历史
 

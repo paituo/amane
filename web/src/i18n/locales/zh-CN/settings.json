@@ -827,7 +827,15 @@
       },
       "rate_limit": {
         "label": "每秒请求上限",
-        "description": "参考供应商说明, 过高可能触发限流"
+        "description": "只约束请求个数, 不管单个请求多大; 按 token 计量的供应商还须设置每分钟 token 上限"
+      },
+      "tpm_limit": {
+        "label": "每分钟 token 上限",
+        "description": "输入与输出合计的每分钟预算, 留空不按 token 限速. 上下文很重时单请求即可烧掉上万 token, 只限请求数防不住 429"
+      },
+      "rate_limit_cooldown_s": {
+        "label": "限流冷却 (秒)",
+        "description": "收到限流后这么多秒内不再发起任何请求 (含会话标题), 上游给出 Retry-After 时以它为准"
       },
       "sql_timeout_ms": {
         "label": "查询默认超时 (毫秒)",

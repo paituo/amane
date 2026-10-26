@@ -13,6 +13,7 @@ from amane.llm.guest_token import DEVICE_ID_FILENAME, GuestTokenAuth
 from amane.probe import llm as probe_module
 from amane.probe.base import ProbeLevel
 from amane.probe.llm import probe_agent, probe_llm
+from tests.agent.support import no_limit
 
 
 class _Usage:
@@ -276,14 +277,14 @@ async def test_agent_effect_reports_a_real_turn_with_tool_calls(make_ctx, monkey
         return _Response()
 
     monkeypatch.setattr("amane.probe.llm.model_request", _fake_request)
-    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config: _FakeAgent())
+    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter: _FakeAgent())
     hot = HotSettings()
     hot.agent.api_key = "sk-test"
 
     events = [
         event
         async for event in probe_agent(
-            make_ctx(hot, runtime=_Runtime(agent_service=SimpleNamespace(executor=object())))
+            make_ctx(hot, runtime=_Runtime(agent_service=SimpleNamespace(executor=object(), request_limiter=no_limit)))
         )
     ]
 
@@ -313,14 +314,14 @@ async def test_agent_effect_warns_when_model_skips_tools(make_ctx, monkeypatch):
         return _Response()
 
     monkeypatch.setattr("amane.probe.llm.model_request", _fake_request)
-    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config: _FakeAgent())
+    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter: _FakeAgent())
     hot = HotSettings()
     hot.agent.api_key = "sk-test"
 
     events = [
         event
         async for event in probe_agent(
-            make_ctx(hot, runtime=_Runtime(agent_service=SimpleNamespace(executor=object())))
+            make_ctx(hot, runtime=_Runtime(agent_service=SimpleNamespace(executor=object(), request_limiter=no_limit)))
         )
     ]
 

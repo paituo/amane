@@ -99,6 +99,37 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/**
+ * 回放行里的未决中断, 整理成客户端能接受的形状 (只留 `id` 与 `reason`: 续批按 id 匹配).
+ *
+ * 折叠把它们挂在末条助理消息的 metadata 上 (键名与服务端同源的 `trace.ts::AGUI_METADATA_KEY`),
+ * 这也是库判定"还有没有未决审批"的同一处; 服务端在错误回合写空 approvals, 折叠后即无此消息.
+ */
+function pendingInterruptsOf(folded: readonly AgentMessage[]): HttpAgent["pendingInterrupts"] {
+  const last = folded.at(-1);
+  if (last?.role !== "assistant" || last.status === undefined) return [];
+  const custom = last.metadata?.custom["agui"];
+  const stored = isPlainObject(custom) ? custom["interrupts"] : undefined;
+  if (!Array.isArray(stored)) return [];
+  return stored.flatMap((item) =>
+    isPlainObject(item) && typeof item["id"] === "string"
+      ? [{ id: item["id"], reason: typeof item["reason"] === "string" ? item["reason"] : "" }]
+      : [],
+  );
+}
+
+/**
+ * 把客户端的未决中断对齐到回放行的事实.
+ *
+ * 客户端只在 RUN_FINISHED 时重置这份状态, 回合以 RUN_ERROR 收尾就永远挂着 —— 之后每次发送都会
+ * 在发出前被拦下 ("Thread has N pending interrupt(s) not addressed by resume"). 服务端在错误
+ * 回合已清空审批态并置回 ACTIVE, 故回放行是唯一真源: 无未决审批即清空, 有则按它的清单重设
+ * (id 不变, 续批照常).
+ */
+function syncPendingInterrupts(agent: HttpAgent, folded: readonly AgentMessage[]): void {
+  agent.pendingInterrupts = pendingInterruptsOf(folded);
+}
+
 function JsonBlock({ value }: { value: unknown }) {
   return (
     <Code block style={{ fontSize: 11, maxHeight: 200, overflow: "auto" }}>
@@ -819,15 +850,29 @@ function AgUiThread({
     },
   });
 
+  // 回合以 RUN_ERROR 收尾时客户端不会重置未决中断 (只有 RUN_FINISHED 会), 留着会让下一次发送
+  // 在发出前就被拦下. 服务端在错误回合已清空审批态, 这里同步清掉, 不必等落定重取回放行.
+  useEffect(() => {
+    const { unsubscribe } = agent.subscribe({
+      onRunErrorEvent: () => {
+        syncPendingInterrupts(agent, []);
+      },
+    });
+    return unsubscribe;
+  }, [agent]);
+
   /** 用回放行重建展示; `syncRuntime` 只在回合不在运行时开: 它的直播聚合不再是展示源, 话题本只需在落定处对齐. */
   const applyRows = useCallback(
     (rows: readonly TraceRow[], syncRuntime: boolean) => {
       const folded = foldTrace(rows);
       messagesRef.current = folded;
       setMessages(folded);
-      if (syncRuntime) runtime.thread.reset(folded);
+      if (!syncRuntime) return;
+      runtime.thread.reset(folded);
+      // 服务端事实随之对齐: 错误回合里它已把审批态清空, 客户端不该再攥着旧中断
+      syncPendingInterrupts(agent, folded);
     },
-    [runtime],
+    [agent, runtime],
   );
 
   /** 取整段回放行: 重建展示, 并把运行时话题本与待批态对齐过去; 失败抛错, 由调用处决定出路. */

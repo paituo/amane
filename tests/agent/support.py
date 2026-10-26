@@ -12,7 +12,13 @@ from typing import Any, cast
 from pydantic_ai.capabilities import Capability
 from pydantic_ai.toolsets import FunctionToolset
 
+from amane.agent.limits import AgentRateLimiter
 from amane.agent.tools import AgentDeps
+
+
+def no_limit() -> AgentRateLimiter:
+    """装配用的限速器: 不等待, 也就不干扰断言. 每次新建, 避免用例间共享状态."""
+    return AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=0.0)
 
 
 class ToolCallContext:

@@ -209,7 +209,8 @@ async def _agent_effect(ctx: ProbeContext, _model: Model) -> AsyncIterator[Probe
     from ..agent.tools import AgentDeps
 
     cfg = ctx.hot.agent
-    agent = build_agent(cfg)
+    # 复用助理的限速器: 自检回合与真实回合共桶, 否则自检自己就会撞上 token 限额
+    agent = build_agent(cfg, service.request_limiter())
     if agent is None:
         yield ctx.rec.warn("真实回合跳过", detail="凭据为空, 助理装配为空")
         return

@@ -13,6 +13,7 @@ from .actor_ops import build_actor_ops_capability
 from .facet_identity import build_facet_identity_capability
 from .feed_ops import build_feed_ops_capability
 from .library_ops import build_library_ops_capability
+from .limits import AgentRateLimiter, RateLimitedModel
 from .metadata_ops import build_metadata_ops_capability
 from .schedule_ops import build_schedule_ops_capability
 from .schema_docs import build_schema_docs
@@ -108,22 +109,28 @@ def resolve_model_settings(config: AgentConfig, *, session_thinking: AgentThinki
     return settings
 
 
-def build_model(config: AgentConfig) -> Model:
-    """不检查 api_key. 不传 ``http_client``: 传输客户端由 pydantic-ai 构造并托管, 与翻译共用协议映射."""
-    return build_llm_model(
-        config.api_type,
-        base_url=config.base_url,
-        api_key=config.api_key,
-        model=config.model,
+def build_model(config: AgentConfig, limiter: AgentRateLimiter) -> Model:
+    """不检查 api_key. 不传 ``http_client``: 传输客户端由 pydantic-ai 构造并托管, 与翻译共用协议映射.
+
+    限速包在 model 上而非回合能力上: 会话标题请求不经过 agent 回合, 只有这样它才与回合共桶.
+    """
+    return RateLimitedModel(
+        build_llm_model(
+            config.api_type,
+            base_url=config.base_url,
+            api_key=config.api_key,
+            model=config.model,
+        ),
+        limiter,
     )
 
 
-def build_agent(config: AgentConfig) -> Agent[AgentDeps, str | DeferredToolRequests] | None:
-    """thinking / max_tokens 经每回合 model_settings 注入."""
+def build_agent(config: AgentConfig, limiter: AgentRateLimiter) -> Agent[AgentDeps, str | DeferredToolRequests] | None:
+    """thinking / max_tokens 经每回合 model_settings 注入; 限速经 model 生效."""
     if not config.api_key:
         return None
     return Agent[AgentDeps, str | DeferredToolRequests](
-        build_model(config),
+        build_model(config, limiter),
         deps_type=AgentDeps,
         output_type=[str, DeferredToolRequests],
         # 使用 instructions 而非 system_prompt: Responses 协议把 agent instructions 放 API 顶层

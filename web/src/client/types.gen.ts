@@ -462,6 +462,14 @@ export type AgentConfig = {
      */
     rate_limit?: number;
     /**
+     * Tpm Limit
+     */
+    tpm_limit?: number | null;
+    /**
+     * Rate Limit Cooldown S
+     */
+    rate_limit_cooldown_s?: number;
+    /**
      * Sql Timeout Ms
      */
     sql_timeout_ms?: number;

@@ -801,7 +801,8 @@ export const AgentConfigSchema = {
                     type: 'null'
                 }
             ],
-            title: 'Max Retries'
+            title: 'Max Retries',
+            default: 0
         },
         request_timeout: {
             anyOf: [
@@ -823,6 +824,26 @@ export const AgentConfigSchema = {
             minimum: 0.1,
             title: 'Rate Limit',
             default: 2
+        },
+        tpm_limit: {
+            anyOf: [
+                {
+                    type: 'integer',
+                    maximum: 10000000,
+                    minimum: 1000
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Tpm Limit'
+        },
+        rate_limit_cooldown_s: {
+            type: 'number',
+            maximum: 900,
+            minimum: 0,
+            title: 'Rate Limit Cooldown S',
+            default: 60
         },
         sql_timeout_ms: {
             type: 'integer',
@@ -3531,8 +3552,10 @@ export const HotSettingsSchema = {
                 base_url: 'https://api.openai.com/v1',
                 model: 'gpt-4o-mini',
                 max_tokens: 128000,
+                max_retries: 0,
                 request_timeout: 600,
                 rate_limit: 2,
+                rate_limit_cooldown_s: 60,
                 sql_timeout_ms: 1000,
                 result_cache_ttl_s: 3600,
                 result_cache_max_entries: 64,

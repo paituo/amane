@@ -828,7 +828,15 @@
       },
       "rate_limit": {
         "label": "Max requests per second",
-        "description": "See the provider's docs; too high may trigger rate limiting"
+        "description": "Limits request count only, not request size; providers metered by token also need a per-minute token cap"
+      },
+      "tpm_limit": {
+        "label": "Max tokens per minute",
+        "description": "Combined input and output budget per minute; empty disables token pacing. With heavy context a single request can burn tens of thousands of tokens, so request pacing alone cannot prevent 429s"
+      },
+      "rate_limit_cooldown_s": {
+        "label": "Rate-limit cooldown (seconds)",
+        "description": "After a rate limit, no request is sent for this many seconds (session titles included); the upstream Retry-After header takes precedence"
       },
       "sql_timeout_ms": {
         "label": "Query timeout (ms)",

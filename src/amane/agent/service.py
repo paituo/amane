@@ -6,13 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from aiolimiter import AsyncLimiter
-
-from ..config import AgentConfig, AgentThinkingMode
 from ..db.models import DEFAULT_SESSION_TITLE, AgentSession, AgentSessionStatus
 from .bridge import AgentRuntimeBridge
 from .cache import ResultCache
 from .executor import QueryExecutor
+from .limits import AgentRateLimiter
 from .naming import generate_title
 from .rows import CancelledRow, no_approvals
 from .runtime import build_agent, build_model, parse_session_thinking
@@ -24,6 +22,7 @@ if TYPE_CHECKING:
     from pydantic_ai import Agent, DeferredToolRequests
     from pydantic_ai.models import Model
 
+    from ..config import AgentConfig, AgentThinkingMode
     from ..db.repository import Repository
 
 
@@ -41,8 +40,8 @@ class AgentService:
     bridge: AgentRuntimeBridge = field(default_factory=AgentRuntimeBridge)
     _stores: dict[int, SessionStore] = field(default_factory=dict)
     _turn_tasks: dict[int, asyncio.Task[None]] = field(default_factory=dict)
-    _limiter: AsyncLimiter | None = field(init=False, default=None)
-    _limiter_rate: float = field(init=False, default=0.0)
+    _limiter: AgentRateLimiter | None = field(init=False, default=None)
+    _limiter_key: tuple[float, int | None, float] = field(init=False, default=(0.0, None, 0.0))
 
     def __post_init__(self) -> None:
         self.sandbox = ReadonlySqlSandbox(self.db_path)
@@ -52,18 +51,24 @@ class AgentService:
     def rebuild(self, config: AgentConfig) -> None:
         self.config = config
         self.cache.configure(ttl_s=config.result_cache_ttl_s, max_entries=config.result_cache_max_entries)
-        self.agent = build_agent(config)
-        self.naming_model = build_model(config) if config.api_key else None
+        # 回合与会话标题共用同一个桶: 首条用户输入时两者并行, 上游按并发计量算两次
+        self.agent = build_agent(config, self.request_limiter())
+        self.naming_model = build_model(config, self.request_limiter()) if config.api_key else None
 
-    def request_limiter(self) -> AsyncLimiter:
-        """助理模型请求的限速器: 桶容量 1, 严格平滑, 全部会话共用同一个桶.
+    def request_limiter(self) -> AgentRateLimiter:
+        """助理模型请求的限速器: 频率桶 / token 预算 / 限流冷却共用一份状态, 全部会话与标题请求共享.
 
-        按 ``config.rate_limit`` 惰性构造并缓存; 该值变化时换新桶. 共用是必要条件:
-        每回合各建一个桶时, 并发会话各自放行, 上游看到的速率是配置值的数倍.
+        按三项配置惰性构造并缓存; 任一配置变化时换新实例, 否则旧桶一直沿用旧值.
+        共用是必要条件: 每回合各建一个时, 并发会话各自放行, 上游看到的速率是配置值的数倍.
         """
-        if self._limiter is None or self._limiter_rate != self.config.rate_limit:
-            self._limiter = AsyncLimiter(1, 1 / self.config.rate_limit)
-            self._limiter_rate = self.config.rate_limit
+        key = (self.config.rate_limit, self.config.tpm_limit, self.config.rate_limit_cooldown_s)
+        if self._limiter is None or self._limiter_key != key:
+            self._limiter = AgentRateLimiter(
+                rate=self.config.rate_limit,
+                tpm=self.config.tpm_limit,
+                cooldown_s=self.config.rate_limit_cooldown_s,
+            )
+            self._limiter_key = key
         return self._limiter
 
     def store_for(self, session_id: int) -> SessionStore:

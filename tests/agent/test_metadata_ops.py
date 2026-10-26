@@ -22,7 +22,7 @@ from amane.config import AgentConfig
 from amane.db.repository import Repository
 from amane.enums import MetadataField
 from amane.parsing import ContentType
-from tests.agent.support import ToolCallContext, cap_toolset, tool_fn
+from tests.agent.support import ToolCallContext, cap_toolset, no_limit, tool_fn
 
 
 def _ops_toolset() -> FunctionToolset[AgentDeps]:
@@ -53,7 +53,7 @@ async def write_deps(tmp_path: Path, repo: Repository) -> AgentDeps:
 
 
 def test_build_agent_wires_explore_and_metadata_ops() -> None:
-    agent = build_agent(AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"))
+    agent = build_agent(AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"), no_limit())
     assert agent is not None
     assert any(getattr(c, "id", None) == "metadata-ops" for c in agent.root_capability.capabilities)
 

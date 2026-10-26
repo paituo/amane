@@ -38,7 +38,6 @@ from ag_ui.core import (
     ToolCallStartEvent,
     UserMessage,
 )
-from aiolimiter import AsyncLimiter
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from pydantic import JsonValue
@@ -180,23 +179,6 @@ class _RequestUsageRows(AbstractCapability[AgentDeps]):
 
 
 @dataclass
-class _RateLimitCapability(AbstractCapability[AgentDeps]):
-    """每次模型请求前按 ``config.rate_limit`` 平滑限速.
-
-    助理路径此前没有任何限速 (AgentConfig.rate_limit 无人消费), 多会话可并行各自打上游;
-    免费/不稳定模型额度薄, 单会话过快即触发持续限流. 桶容量 1, 严格平滑, 与翻译路径同构.
-    """
-
-    limiter: AsyncLimiter
-
-    async def before_model_request(
-        self, ctx: RunContext[AgentDeps], request_context: ModelRequestContext
-    ) -> ModelRequestContext:
-        await self.limiter.acquire()
-        return request_context
-
-
-@dataclass
 class _ReplayRows:
     """把 AG-UI 事件展开为回放行 (页面重建对话用).
 
@@ -335,10 +317,7 @@ async def run_agent_agui(
                 async for event in adapter.run_stream(
                     message_history=history,
                     deps=deps,
-                    capabilities=[
-                        _RequestUsageRows(store=store),
-                        _RateLimitCapability(limiter=service.request_limiter()),
-                    ],
+                    capabilities=[_RequestUsageRows(store=store)],
                     model_settings=resolve_model_settings(
                         service.config, session_thinking=service.session_thinking(session_id)
                     ),
