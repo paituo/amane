@@ -28,6 +28,8 @@ import type {
   RoutineType,
   SavedQueryEntity,
   ScanMode,
+  SearchField,
+  SearchType,
   SiteOutcomeKind,
   SortOrder,
   SubmitTaskData,
@@ -202,6 +204,21 @@ export const SITE_OUTCOME_KINDS = exhaustiveTuple<SiteOutcomeKind>()(
 );
 
 export const SORT_ORDERS = exhaustiveTuple<SortOrder>()("asc", "desc");
+
+/** 检索方式; 顺序即菜单显示顺序. 后端只接受这三种 (未走索引时的子串扫描不在请求里). */
+export const SEARCH_TYPES = exhaustiveTuple<SearchType>()("keyword", "vector", "hybrid");
+
+/** 可检索字段; 顺序即复选框排列顺序, 与后端 `SearchField` 声明序一致. */
+export const SEARCH_FIELDS = exhaustiveTuple<SearchField>()(
+  "number",
+  "title",
+  "plot",
+  "actors",
+  "tags",
+  "series",
+  "studio",
+  "publisher",
+);
 
 export const METADATA_SORT_FIELDS = exhaustiveTuple<MetadataSortField>()(
   "number",

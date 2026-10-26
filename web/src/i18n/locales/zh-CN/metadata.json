@@ -7,6 +7,26 @@
     "facetEmpty": "无匹配",
     "clearHistory": "清除全部历史",
     "forgetTerm": "删除这条搜索记录",
+    "options": "搜索设置",
+    "searchType": "检索方式",
+    "searchTypes": {
+      "keyword": "关键字",
+      "vector": "向量",
+      "hybrid": "混合"
+    },
+    "searchFields": "搜索字段",
+    "searchFieldNames": {
+      "number": "番号",
+      "title": "标题",
+      "plot": "简介",
+      "actors": "演员",
+      "tags": "标签",
+      "series": "系列",
+      "studio": "制作商",
+      "publisher": "发行商"
+    },
+    "degradedHint": "向量检索不可用, 本次已退回关键字",
+    "lastFieldHint": "至少保留一个字段",
     "library": "媒体库",
     "hasFiles": "关联文件",
     "hasFilesAny": "不限",

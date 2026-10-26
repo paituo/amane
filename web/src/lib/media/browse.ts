@@ -9,17 +9,46 @@
 
 import type { ParseKeys } from "i18next";
 import { z } from "zod";
-import type { MetadataSortField } from "@/client/types.gen";
+import type { MetadataSortField, SearchField } from "@/client/types.gen";
 import {
   CONTENT_TYPES,
   FILE_DEFINITIONS,
   METADATA_SORT_FIELDS,
   MOSAICS,
+  SEARCH_FIELDS,
+  SEARCH_TYPES,
   SORT_ORDERS,
 } from "@/lib/exhaustive-maps";
 import { coerceIdList } from "@/lib/facets";
 
 const idListSchema = z.preprocess(coerceIdList, z.array(z.number().int().positive()).optional());
+
+/**
+ * 检索方式的缺省值.
+ *
+ * 与后端不同: 后端 `search_type` 缺省表示"跟随配置", 而前端必须给出一个确定的选择,
+ * 否则菜单里没有选中项. 因此这个默认值由前端在每次请求里显式带上.
+ */
+export const DEFAULT_SEARCH_TYPE = "hybrid" as const satisfies (typeof SEARCH_TYPES)[number];
+
+/** 全选等价于不限; 此时不写进 URL, 后端缺参即全选, 地址也不会随字段个数膨胀. */
+export function isAllSearchFields(fields: readonly SearchField[]): boolean {
+  return fields.length >= SEARCH_FIELDS.length;
+}
+
+function coerceSearchFields(value: unknown): SearchField[] | undefined {
+  if (value == null || value === "") return undefined;
+  const raw = Array.isArray(value) ? value : [value];
+  const fields = raw.filter((item): item is SearchField =>
+    SEARCH_FIELDS.includes(item as SearchField),
+  );
+  return fields.length > 0 ? fields : undefined;
+}
+
+const searchFieldListSchema = z.preprocess(
+  coerceSearchFields,
+  z.array(z.enum(SEARCH_FIELDS)).optional(),
+);
 
 /** 片库与演员详情出演作品共用的排序项; 数组顺序即菜单显示顺序. */
 export const METADATA_SORT_OPTIONS = [
@@ -52,6 +81,10 @@ export const DEFAULT_METADATA_SORT_PREFERENCE: MetadataSortPreference = {
 
 export const metaSearchSchema = z.object({
   q: z.string().optional(),
+  // 缺省不写进 URL: 读取处按 DEFAULT_SEARCH_TYPE 兜底, 地址栏才不会被默认值塞满.
+  // 非法值 (手改过的链接) 一并退回 undefined, 走同一个兜底.
+  search_type: z.enum(SEARCH_TYPES).optional().catch(undefined),
+  search_fields: searchFieldListSchema,
   view: z.enum(["grid", "list"]).catch("grid").default("grid"),
   sort_by: z.enum(METADATA_SORT_FIELDS).optional(),
   order: z.enum(SORT_ORDERS).optional(),

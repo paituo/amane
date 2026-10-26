@@ -7,6 +7,26 @@
     "facetEmpty": "No matches",
     "clearHistory": "Clear all history",
     "forgetTerm": "Remove this search term",
+    "options": "Search options",
+    "searchType": "Search type",
+    "searchTypes": {
+      "keyword": "Keyword",
+      "vector": "Vector",
+      "hybrid": "Hybrid"
+    },
+    "searchFields": "Search fields",
+    "searchFieldNames": {
+      "number": "Number",
+      "title": "Title",
+      "plot": "Plot",
+      "actors": "Actors",
+      "tags": "Tags",
+      "series": "Series",
+      "studio": "Studio",
+      "publisher": "Publisher"
+    },
+    "degradedHint": "Vector search unavailable, fell back to keyword",
+    "lastFieldHint": "Keep at least one field",
     "library": "Library",
     "hasFiles": "Linked files",
     "hasFilesAny": "Any",

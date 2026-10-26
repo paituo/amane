@@ -1,5 +1,6 @@
 import { ActionIcon, Autocomplete, Group, Text } from "@mantine/core";
 import { IconSearch, IconX } from "@tabler/icons-react";
+import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { useUIStore } from "@/stores/ui";
 
@@ -23,6 +24,7 @@ export function SearchInput({
   onSubmit,
   placeholder,
   historyKey,
+  rightSection,
 }: {
   value: string;
   onChange: (value: string) => void;
@@ -31,6 +33,8 @@ export function SearchInput({
   placeholder?: string;
   /** 列表入口标识; 不同的入口各记各的历史. */
   historyKey: string;
+  /** 输入框右侧的附加控件 (如检索方式菜单). 传了才放开指针事件. */
+  rightSection?: ReactNode;
 }) {
   const { t } = useTranslation("metadata");
   const terms = useUIStore((state) => state.recentSearches[historyKey] ?? NO_TERMS);
@@ -69,6 +73,8 @@ export function SearchInput({
       data={data}
       placeholder={placeholder}
       leftSection={<IconSearch size={16} />}
+      rightSection={rightSection}
+      rightSectionPointerEvents={rightSection ? "all" : undefined}
       w="100%"
       // 默认过滤按 label 猜, 会把"清除全部历史"整项滤掉 (它的显示文案不在 label 里), 输入框一旦有字就再也
       // 点不到"全部清除". 这里自己滤: 历史词按输入收窄, 清除项常驻.

@@ -10,13 +10,14 @@ import {
   listMetadataInfiniteOptions,
   listMetadataOptions,
 } from "@/client/@tanstack/react-query.gen";
-import type { FacetKind, MetadataSortField } from "@/client/types.gen";
+import type { FacetKind, MetadataSortField, SearchField, SearchType } from "@/client/types.gen";
 import { BrowsePageShell } from "@/components/common/browse-page-shell";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { InfiniteScrollSentinel } from "@/components/common/infinite-scroll-sentinel";
 import { ListDefaultActions } from "@/components/common/list-default-actions";
 import { PageSizeSelect } from "@/components/common/page-size-select";
 import { SearchInput } from "@/components/common/search-input";
+import { SearchOptionsMenu } from "@/components/common/search-options-menu";
 import { SortMenu } from "@/components/common/sort-menu";
 import { FacetBadge } from "@/components/media/facet-badge";
 import {
@@ -31,8 +32,14 @@ import { activeFacetFilters, type FacetFilters, removeFacetId, setFacetIds } fro
 import { useListStateMemory } from "@/hooks/use-list-state-memory";
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
 import { useResettingState } from "@/hooks/use-resetting-state";
+import { SEARCH_FIELDS, SEARCH_TYPES } from "@/lib/exhaustive-maps";
 import { nextOffsetPageParam } from "@/lib/infinite-list";
-import { metaSearchSchema, METADATA_SORT_OPTIONS } from "@/lib/media/browse";
+import {
+  DEFAULT_SEARCH_TYPE,
+  isAllSearchFields,
+  metaSearchSchema,
+  METADATA_SORT_OPTIONS,
+} from "@/lib/media/browse";
 import { useFavoriteTagId } from "@/lib/media/favorites";
 import { metaListDefaults } from "@/lib/nav-defaults";
 import { useUIStore } from "@/stores/ui";
@@ -174,8 +181,15 @@ function MetaIndexPage() {
     user_tag_id: search.user_tag_id,
   };
 
+  // 检索方式与字段范围. 两者都由 schema 给默认值: 方式缺省为混合, 字段缺省为全选
+  // (全选不写进 URL —— 后端缺参即全选).
+  const searchType = search.search_type ?? DEFAULT_SEARCH_TYPE;
+  const searchFields = search.search_fields ?? SEARCH_FIELDS;
+
   const listQueryParams = {
     search: search.q || undefined,
+    search_type: searchType,
+    search_fields: isAllSearchFields(searchFields) ? undefined : [...searchFields],
     sort_by: search.sort_by,
     order: search.order,
     has_files: hasFiles === null ? undefined : hasFiles,
@@ -223,6 +237,23 @@ function MetaIndexPage() {
     [gridQuery.data],
   );
   const total = isList ? (listQuery.data?.total ?? 0) : (gridQuery.data?.pages[0]?.total ?? 0);
+  const degraded = isList
+    ? (listQuery.data?.search_degraded ?? false)
+    : (gridQuery.data?.pages[0]?.search_degraded ?? false);
+
+  function setSearchType(next: SearchType) {
+    void navigate({ search: (prev) => ({ ...prev, search_type: next, page: 1 }) });
+  }
+
+  function setSearchFields(next: SearchField[]) {
+    void navigate({
+      search: (prev) => ({
+        ...prev,
+        search_fields: isAllSearchFields(next) ? undefined : next,
+        page: 1,
+      }),
+    });
+  }
 
   function handleSearchChange(v: string) {
     setSearchInput(v);
@@ -364,6 +395,28 @@ function MetaIndexPage() {
           onSubmit={handleSearchChange}
           placeholder={t("search.placeholder")}
           historyKey="meta"
+          rightSection={
+            <SearchOptionsMenu
+              searchType={searchType}
+              modes={SEARCH_TYPES.map((value) => ({
+                value,
+                label: t(`search.searchTypes.${value}`),
+              }))}
+              onSearchTypeChange={setSearchType}
+              fields={searchFields}
+              fieldOptions={SEARCH_FIELDS.map((value) => ({
+                value,
+                label: t(`search.searchFieldNames.${value}`),
+              }))}
+              onFieldsChange={setSearchFields}
+              degraded={degraded}
+              label={t("search.options")}
+              modeLabel={t("search.searchType")}
+              fieldsLabel={t("search.searchFields")}
+              degradedHint={t("search.degradedHint")}
+              lastFieldHint={t("search.lastFieldHint")}
+            />
+          }
         />
       }
       extras={
