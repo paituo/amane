@@ -17,6 +17,7 @@ export type HlsFailure = {
  *
  * `hls` 是 hls.js 报告的致命错误 (含失败分片与响应状态), `media` 是媒体元素自身的错误 (`<video>` 的
  * `error`, 只在原生播放路径上出现), `engine` 表示浏览器缺少可用的播放引擎 — hls.js 判定自身不可用.
+ * `nosignal` 是没有错误的那种失败: 容器解得开、时间轴在走, 视频轨却一帧画面都没有.
  *
  * 播放器只报告事实, 不判断应当如何提示; 分类见 `isCodecFailure`.
  */
@@ -29,7 +30,16 @@ export type PlaybackFailure =
       /** 浏览器给出的原因 (`MediaError.message`), 例如 `DEMUXER_ERROR_NO_SUPPORTED_STREAMS`; 通常为空串. */
       detail: string | null;
     }
-  | { kind: "engine" };
+  | { kind: "engine" }
+  | {
+      /**
+       * 静默失败: 元素自认为有可渲染的数据, 却没有解出任何画面.
+       *
+       * 文件里除了视频还有音轨时就会走到这里 — 能解的音轨先让播放时钟走起来, 解不了视频轨被直接丢掉,
+       * 内核不报错. 表现就是黑屏带声音, `error` 永远是空.
+       */
+      kind: "nosignal";
+    };
 
 /** `MediaError.code` 的两个取值: 解码失败与源不受支持. 取值见 HTML 规范的错误码表. */
 const MEDIA_ERR_DECODE = 3;
@@ -50,6 +60,7 @@ const HLS_CODEC_DETAILS = /codec/i;
  * - `hls`: 错误详情表明编码不受支持.
  * - `media`: `MEDIA_ERR_DECODE` 或 `MEDIA_ERR_SRC_NOT_SUPPORTED`. 后者的成因不止编码 (404、非媒体响应
  *   同样是它), 因此调用方必须先确认服务端能给出字节再采用本判定, 见点播面板里的 `probePlayback`.
+ * - `nosignal`: 元素有可渲染的数据却没有画面, 排除网络之后只剩"视频轨解不出来". 同样要求先确认字节能取到.
  *
  * 判定的用途是选择提示与兜底入口: 编码不受支持时重试不会改变结果, 应引导外部播放器或换一条码流.
  */
@@ -57,7 +68,7 @@ export function isCodecFailure(failure: PlaybackFailure | null): boolean {
   if (failure == null) {
     return false;
   }
-  if (failure.kind === "engine") {
+  if (failure.kind === "engine" || failure.kind === "nosignal") {
     return true;
   }
   if (failure.kind === "hls") {
