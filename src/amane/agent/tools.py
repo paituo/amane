@@ -645,6 +645,15 @@ def build_explore_toolset() -> FunctionToolset[AgentDeps]:
         `queries[].kept` show which string found nothing (0 hits = no anchor in the library,
         drop or reword it). Change the ANGLE, never re-send the same string with synonyms.
 
+        番号 (release code) 查询: 只要用户给的是番号或番号的一部分, 就必须走番号精确/前缀匹配,
+        而不是把它当剧情语义去全字段搜. 番号里的连字符在 FTS 里会被拆碎, 当普通关键词命中极不稳,
+        而且番号本身没有"剧情", 走语义路只会召回无关条目. 做法: 把 `fields` 设成 `["number"]`,
+        `query`/`queries` 直接给番号串即可 —— 例如 `fields=["number"], queries=["CAWD-441"]`
+        (精确番号) 或 `fields=["number"], queries=["CAWD"]` / `["5 Sisters"]` (系列前缀).
+        注意: 不要像 `fields=["title","plot"]` 那样漏掉 `number`, 否则番号会被当成剧情词, 整批
+        0 命中 (这就是早前 `CAWD` / `CAWD-441` 搜不到的根因). 同一句话里既有番号又有剧情时,
+        拆成两个串: 番号串配 `fields=["number"]`, 剧情串走默认全字段.
+
         `fields` narrows which columns the keyword path looks at: number / title / plot / actors /
         tags / series / studio / publisher (default: all). The semantic path always reads the whole
         record, so `fields` only sharpens the literal match — use it when you want e.g. only
