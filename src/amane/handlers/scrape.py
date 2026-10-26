@@ -21,6 +21,7 @@ from ..net.errors import FailureReason
 from ..observability import current
 from ..observability.models import SiteOutcomeKind
 from ..plugins.models import SourceDescriptor, SourceTrait
+from ..utils.text import clean_title
 from ._common import ensure_oshash, finalize_media_file
 from .models import ActorScrapePayload, CacheKind, OrganizePayload, ScrapePayload, ScrapeResult
 from .protocol import FollowupTask, TaskHandler, TaskResult
@@ -174,6 +175,14 @@ class ScrapeHandler(TaskHandler[ScrapePayload, ScrapeResult]):
 
         # 获取结束: 进度分子对齐标量字段数, 其后为物化与持久化.
         await self.report_progress(len(SCALAR_FIELDS), progress_total, "fetch")
+
+        # 标题去重: 站点普遍把「番号 + 作品名 + 出演者」拼成一个标题, 与 number / actors 字段重复.
+        # 在翻译前剥掉, 译后标题就不会再带上番号与日文原名; 与存量回填共用 clean_title, 幂等.
+        result.metadata.title = clean_title(
+            result.metadata.title,
+            payload.number,
+            [item.name for item in result.metadata.actors],
+        )
 
         # 翻译文本字段; 失败不阻断刮削.
         if self._translator is not None:
