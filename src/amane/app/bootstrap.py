@@ -102,6 +102,9 @@ class AppSession:
             await self.runtime.playback_factory.aclose()
         if self.runtime.browser is not None:
             await self.runtime.browser.close()
+        # 助理的传输客户端由本侧重启/重建时替换, 退出时也要主动关
+        if self.runtime.agent_service is not None:
+            await self.runtime.agent_service.aclose()
         await self.runtime.web_client.close()
         if self.runtime.translation_cache is not None:
             await self.runtime.translation_cache.close()
@@ -167,6 +170,8 @@ async def start_app(config: ConfigManager | None = None) -> AppSession:
         repo=repo,
         cache=ResultCache(ttl_s=hot.agent.result_cache_ttl_s, max_entries=hot.agent.result_cache_max_entries),
         config=hot.agent,
+        # 助理的代理有自己的开关与专用地址, 都空才回退全局 network.proxy
+        network_proxy=hot.network.proxy,
     )
 
     # 信任边界: 安全目录 + API token

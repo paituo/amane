@@ -498,7 +498,8 @@ class AppRuntime:
         )
 
         if self.agent_service is not None:
-            self.agent_service.rebuild(hot.agent)
+            # 代理可能随 [agent](专用) 或 [network](回退) 变化, 两处都要同步
+            self.agent_service.rebuild(hot.agent, hot.network.proxy)
 
         previous_playback = self.playback_factory
         # 新的 Factory 构造时丢弃解析结果缓存 (配置改动可能更换凭据); token 表与探测缓存仍在

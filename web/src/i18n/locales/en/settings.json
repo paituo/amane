@@ -799,6 +799,14 @@
       "base_url": {
         "label": "API Endpoint"
       },
+      "use_proxy": {
+        "label": "Use proxy",
+        "description": "Send agent requests through the configured proxy. When off, connections are direct: neither the global proxy nor proxy environment variables are used"
+      },
+      "proxy": {
+        "label": "Agent proxy",
+        "description": "Dedicated proxy for the agent; leave empty to use the global proxy. Ignored when \"Use proxy\" is off"
+      },
       "model": {
         "label": "Model"
       },
@@ -816,7 +824,7 @@
       },
       "max_tokens": {
         "label": "Max output tokens",
-        "description": "Per-reply output cap. The provider rejects values above the model's limit"
+        "description": "Per-reply output cap, max 65536. Some models do not reject oversized values — they degrade instead: no tool call is emitted, the call is written into the reasoning text and the turn ends, showing up as \"thought for ages and did nothing\". 16K is plenty."
       },
       "max_retries": {
         "label": "Transport retries",
@@ -834,9 +842,21 @@
         "label": "Max tokens per minute",
         "description": "Combined input and output budget per minute; empty disables token pacing. With heavy context a single request can burn tens of thousands of tokens, so request pacing alone cannot prevent 429s"
       },
+      "tpm_window_s": {
+        "label": "Token budget window (seconds)",
+        "description": "Sliding window the budget is measured over; the default 60s matches the upstream metering window. A shorter window makes the local estimate looser and hits 429 sooner"
+      },
       "rate_limit_cooldown_s": {
         "label": "Rate-limit cooldown (seconds)",
         "description": "After a rate limit, no request is sent for this many seconds (session titles included); the upstream Retry-After header takes precedence"
+      },
+      "rate_limit_backoff_factor": {
+        "label": "Rate-limit cooldown multiplier",
+        "description": "Multiplies the cooldown on each consecutive rate limit (e.g. 180→360→720); resets to the base value after any successful request. 1 disables escalation"
+      },
+      "rate_limit_max_cooldown_s": {
+        "label": "Max rate-limit cooldown (seconds)",
+        "description": "Upper bound for the escalated cooldown so a turn cannot hang indefinitely when a daily quota is exhausted; 0 means no cap"
       },
       "sql_timeout_ms": {
         "label": "Query timeout (ms)",

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import httpx2
+
 from ..db.models import DEFAULT_SESSION_TITLE, AgentSession, AgentSessionStatus
 from .bridge import AgentRuntimeBridge
 from .cache import ResultCache
@@ -13,7 +15,7 @@ from .executor import QueryExecutor
 from .limits import AgentRateLimiter
 from .naming import generate_title
 from .rows import CancelledRow, no_approvals
-from .runtime import build_agent, build_model, parse_session_thinking
+from .runtime import build_agent, build_http_client, build_model, parse_session_thinking
 from .sql import ReadonlySqlSandbox
 from .tools import AgentDeps
 from .trace import SessionStore, delete_session_dir, session_dir
@@ -26,6 +28,15 @@ if TYPE_CHECKING:
     from ..db.repository import Repository
 
 
+_MAX_RETIRED_CLIENTS = 8
+"""热重载时保留的旧传输客户端上限.
+
+保留是必要的: ``rebuild`` 由"保存设置"触发, 那一刻可能还有回合在跑 (另一个标签页在对话).
+就地 ``aclose`` 会把在飞的请求打断, 现象是"改完设置对话突然失败". 上限只为避免反复保存时
+无限堆对象 —— 被挤出去的那个已经空闲很久了.
+"""
+
+
 @dataclass
 class AgentService:
     db_path: Path
@@ -33,6 +44,12 @@ class AgentService:
     repo: Repository
     cache: ResultCache
     config: AgentConfig
+    network_proxy: str | None = None
+    """全局代理 (``network.proxy``) 的当前值, 供 ``agent.use_proxy`` 未填专用地址时回退.
+
+    由装配处传入而不是让本对象去读 ``HotSettings``: 助理只该知道自己那份配置加一个回退值,
+    否则配置对象之间会互相引用, 热重载顺序也变得要紧.
+    """
     sandbox: ReadonlySqlSandbox = field(init=False)
     executor: QueryExecutor = field(init=False)
     agent: Agent[AgentDeps, str | DeferredToolRequests] | None = field(init=False, default=None)
@@ -41,32 +58,102 @@ class AgentService:
     _stores: dict[int, SessionStore] = field(default_factory=dict)
     _turn_tasks: dict[int, asyncio.Task[None]] = field(default_factory=dict)
     _limiter: AgentRateLimiter | None = field(init=False, default=None)
-    _limiter_key: tuple[float, int | None, float] = field(init=False, default=(0.0, None, 0.0))
+    _limiter_key: tuple[float, int | None, float, float, float, float] = field(
+        init=False, default=(0.0, None, 0.0, 0.0, 0.0, 0.0)
+    )
+    _http_client: httpx2.AsyncClient | None = field(init=False, default=None)
+    _retired: list[httpx2.AsyncClient] = field(init=False, default_factory=list)
+    _closing: set[asyncio.Task[None]] = field(init=False, default_factory=set)
 
     def __post_init__(self) -> None:
         self.sandbox = ReadonlySqlSandbox(self.db_path)
         self.executor = QueryExecutor(self.sandbox, self.cache)
-        self.rebuild(self.config)
+        self.rebuild(self.config, self.network_proxy)
 
-    def rebuild(self, config: AgentConfig) -> None:
+    def rebuild(self, config: AgentConfig, network_proxy: str | None = None) -> None:
+        """按新配置重建模型与 agent. ``network_proxy`` 为 ``hot.network.proxy`` 的当前值.
+
+        代理在这里解析: ``agent.use_proxy`` 是总闸, ``agent.proxy`` 是覆盖, 都空才回退全局.
+        客户端自建且 ``trust_env=False`` (见 ``runtime.build_http_client``) —— pydantic-ai 托管的
+        默认客户端只认环境变量, 设置页里配的代理对它无效.
+        """
         self.config = config
+        self.network_proxy = network_proxy
         self.cache.configure(ttl_s=config.result_cache_ttl_s, max_entries=config.result_cache_max_entries)
         # 回合与会话标题共用同一个桶: 首条用户输入时两者并行, 上游按并发计量算两次
-        self.agent = build_agent(config, self.request_limiter())
-        self.naming_model = build_model(config, self.request_limiter()) if config.api_key else None
+        limiter = self.request_limiter()
+        if config.api_key:
+            client = build_http_client(config.resolved_proxy(network_proxy))
+            # 两者打同一个端点, 共用一个客户端; 各建一个只是多一份连接池
+            self.agent = build_agent(config, limiter, http_client=client)
+            self.naming_model = build_model(config, limiter, http_client=client)
+        else:
+            client = None
+            self.agent = None
+            self.naming_model = None
+        self._replace_client(client)
+
+    def _replace_client(self, client: httpx2.AsyncClient | None) -> None:
+        """换成新客户端; 旧的先进退休队列, 不就地关闭.
+
+        ``rebuild`` 是"保存设置"同步触发的, 那一刻可能还有回合在跑 (另一个标签页). 就地
+        ``aclose`` 会让在飞的请求抛 "client has been closed", 表现为"改完设置对话就失败".
+        队列超过 ``_MAX_RETIRED_CLIENTS`` 才关最老的那个 —— 它早已空闲.
+        """
+        previous, self._http_client = self._http_client, client
+        if previous is not None and previous is not client:
+            self._retired.append(previous)
+        while len(self._retired) > _MAX_RETIRED_CLIENTS:
+            self._schedule_close(self._retired.pop(0))
+
+    def _schedule_close(self, client: httpx2.AsyncClient) -> None:
+        """同步调用点没有 await 的机会: 有事件循环就排任务, 没有 (启动期) 交 GC.
+
+        启动期没有旧客户端 (``previous`` 为 None), 走不到这里, 因此不会留下未关闭的连接池.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(client.aclose())
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+
+    async def aclose(self) -> None:
+        """关闭助理持有的全部传输客户端. 进程退出时由 ``AppSession.aclose`` 调用."""
+        current, self._http_client = self._http_client, None
+        retired, self._retired = self._retired, []
+        for client in [*retired, current]:
+            if client is not None:
+                await client.aclose()
+        closing, self._closing = self._closing, set()
+        for task in closing:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await task
 
     def request_limiter(self) -> AgentRateLimiter:
         """助理模型请求的限速器: 频率桶 / token 预算 / 限流冷却共用一份状态, 全部会话与标题请求共享.
 
-        按三项配置惰性构造并缓存; 任一配置变化时换新实例, 否则旧桶一直沿用旧值.
-        共用是必要条件: 每回合各建一个时, 并发会话各自放行, 上游看到的速率是配置值的数倍.
+        按配置惰性构造并缓存; 任一项变化时换新实例, 否则旧桶一直沿用旧值 (改配置后不重建
+        就等于没改). 共用是必要条件: 每回合各建一个时, 并发会话各自放行, 上游看到的速率
+        是配置值的数倍.
         """
-        key = (self.config.rate_limit, self.config.tpm_limit, self.config.rate_limit_cooldown_s)
+        key = (
+            self.config.rate_limit,
+            self.config.tpm_limit,
+            self.config.rate_limit_cooldown_s,
+            self.config.tpm_window_s,
+            self.config.rate_limit_backoff_factor,
+            self.config.rate_limit_max_cooldown_s,
+        )
         if self._limiter is None or self._limiter_key != key:
             self._limiter = AgentRateLimiter(
                 rate=self.config.rate_limit,
                 tpm=self.config.tpm_limit,
                 cooldown_s=self.config.rate_limit_cooldown_s,
+                window_s=self.config.tpm_window_s,
+                backoff_factor=self.config.rate_limit_backoff_factor,
+                max_cooldown_s=self.config.rate_limit_max_cooldown_s,
             )
             self._limiter_key = key
         return self._limiter

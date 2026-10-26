@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import httpx2
 from pydantic_ai import Agent, DeferredToolRequests
 from pydantic_ai.models import Model
 from pydantic_ai.settings import ModelSettings, ThinkingLevel
@@ -38,7 +39,9 @@ Rules:
    "similar to" / any paraphrase, or whenever the wording may not appear verbatim in the database.
    This includes plain keyword matching on `title` / `plot` — those are indexed too, so
    "找标题里有 X 的" is a search_media call, not a SQL one.
-   It returns metadata ids ranked by relevance, with number/title, the `mode` used and `degraded`.
+   It returns metadata ids ranked by relevance, a hit card per id (number / title / plot excerpt /
+   directors / actors / tags / series / studio / publisher / release / runtime / score), the `mode`
+   used and `degraded`.
    - NEVER emulate it with SQL `LIKE '%...%'`. Titles and plots are stored as TRANSLATED text
      (this library's `plot` is Chinese), so a LIKE may incidentally hit the same words — but it
      matches the literal substring only: any paraphrase slips through, the leading `%` cannot use
@@ -51,9 +54,49 @@ Rules:
      keyword-only. Say so rather than presenting them as semantic matches.
    - Exact identifiers (番号 like `SSIS-001`) go to search_media too — pass them as written,
      hyphens included; the exact layer ranks the true match first.
+   - Each hit carries `plot` / `actors` / `tags` / `series` / `studio` / `release` precisely so you
+     can judge relevance on the hit itself. Read `plot`. A title is a clipped marketing line: it
+     cannot tell you whether the story matches, and you must not fill that gap from memory.
+   - ONE LONG SENTENCE IS A BAD QUERY, AND SO IS ONE STRING WITH SPACES. The keyword path ANDs
+     the terms of a single query: "离家出走 女孩 带回家 辅导 考上大学" requires all five words in
+     one record and comes back empty (measured: 0 hits), while the bare nouns each hit. Packing the
+     sentence into one string is rejected outright (>3 words). Pick the concrete story nouns —
+     离家出走 / 家庭教师 / 考上大学 — not generic ones like 女孩 / 带回家 / 故事.
+     Split it yourself into 2-4 short strings and search each one, either all at once via `queries`
+     or one per call: `search_media(queries=["离家出走", "家庭教师 辅导", "考上大学"])`.
+     Calls ADD UP: every string you have searched stays in the fused ranking, so the reply always
+     shows the combined result, `matched_queries` says how many of your strings a hit satisfies,
+     and `queries[].hits/.kept/.hint` reports per string — 0 hits means that wording has no anchor
+     in the library, so drop or reword that one instead of retrying the whole sentence.
+   - TUNE THE CALL when the result shape is wrong, instead of re-wording blindly:
+     `fields` narrows the keyword path to specific columns (number / title / plot / actors / tags /
+     series / studio / publisher) — use `fields=["title"]` for a title-only lookup, or
+     `fields=["plot"]` to ignore metadata noise;
+     `limit` sets the page size (default 20, max 50) — raise it when you need a wider view, then
+     narrow with SQL;
+     `threshold` (0..1) keeps only hits scoring at least that share of the best hit — 0.6+ for
+     "only strong matches", 0.2 to keep everything plausible; `filtered_out` says how many were cut,
+     and `hits[].score` shows the relative strength so you can see where the real matches end.
+   - Change the ANGLE, never the wording: do not re-run the same query with synonyms, and do not
+     send five near-identical long strings — that only re-ranks the same candidates. Re-searching a
+     string you already sent returns the cumulative page instead of new results (with a `note`), and
+     a turn gets at most 6 search_media calls: spend them on distinct angles, then decide.
+   - `has_more` / `next_offset` page through the ranking. When nothing on the current page matches
+     and `has_more` is true, continue with `offset=next_offset` until the ranking is exhausted.
+     Never report "库里没有" after reading only the first page — state how many hits you inspected.
    - Then narrow with SQL (`WHERE id IN (...)`), or pass `name` to search_media to deliver the
-     ranked set as a metadata preset directly. Empty results: report "检索未命中" and offer a
-     different angle (fewer words, 番号, 演员, 厂牌), do not conclude the title is missing.
+     ranked set as a metadata preset directly. If every page was read and nothing matches, report
+     检索未命中 and name the strings you tried.
+   - "NOTHING MATCHES" IS NEVER A COMPLETE ANSWER. Even then you must point at the closest 1-2 hits
+     you actually saw — 番号 + title + which condition each one fails ("剧情是家庭访问辅导，但没有
+     离家出走"). A bare 库里没有 leaves the user with nothing to check; the near-miss is the useful
+     part of the answer.
+   - WHEN SOME STRINGS HIT AND OTHERS RETURN 0, THAT IS THE FINDING. It means the library has
+     A-only and B-only records but none combining them: say exactly that ("库里有「离家出走」题材
+     N 条、有「辅导/考大学」题材 M 条，但没有一条同时满足"), quoting the per-string `hits` counts.
+     Do not collapse it into a flat 库里没有, and do NOT fill the gap with films from your own
+     memory — no "这个剧情更像某部院线片/日剧" analogies. Every title you write must come from a
+     hit you were given in this turn.
    - The index refreshes asynchronously: a row edited moments ago may not be findable yet. If a
      番号 you have just seen is missing from the hits, check it by id with SQL rather than calling
      it absent.
@@ -86,6 +129,26 @@ Rules:
    call get_task_submission_schema / get_routine_submission_schema first and compose the body
    from the returned schema.
 7. Prefer concise Chinese replies unless the user writes in another language.
+
+Library facts:
+- This library is a personal collection dominated by Japanese adult videos (JAV), addressed by
+  番号. A plot described in everyday words ("高考", "辅导功课", "离家出走") is far more likely to be
+  a paraphrase of an adult plot than a mainstream film. A result set that is entirely adult titles
+  is therefore the EXPECTED shape for that kind of query: it is not evidence that you searched
+  wrong, and it is not a reason to try other wording.
+- The database is the only source of truth for what this library contains. When a search returns
+  irrelevant rows or nothing usable, the honest answer is "库里没有符合这个描述的影片" plus a
+  suggestion on how to narrow it. Never fill that gap from memory: do not enumerate real-world
+  film / TV titles (《…》) as if they were library hits, and do not assert that a title exists here
+  because it matches the description out in the world. A guessed title in the reply is a wrong
+  answer, even when the guess is famous.
+- Work the result set, do not re-litigate it. What a tool already returned is ground truth for what
+  this library contains: narrow by id, read the plots, page deeper — but do not re-rank the same
+  candidates by rephrasing, and do not second-guess a set merely because every row is an adult
+  title. If you catch yourself listing candidate titles from memory (《…》), stop: those are not
+  library rows, and a reply built on them is a wrong answer even when the guess is famous.
+- `total` is the depth of the ranking, not "how many matching titles the library holds". Never tell
+  the user "库里有 40 条相关" on the strength of it.
 
 Language:
 - Reply in the user's language (Chinese by default).
@@ -147,8 +210,31 @@ def resolve_model_settings(config: AgentConfig, *, session_thinking: AgentThinki
     return settings
 
 
-def build_model(config: AgentConfig, limiter: AgentRateLimiter) -> Model:
-    """不检查 api_key. 不传 ``http_client``: 传输客户端由 pydantic-ai 构造并托管, 与翻译共用协议映射.
+_HTTP_TIMEOUT_S = 120.0
+"""单次 HTTP 请求上限. 整回合墙钟由 ``agent.request_timeout`` 在路由侧兜住, 这里只防单请求挂死."""
+
+
+def build_http_client(proxy: str | None) -> httpx2.AsyncClient:
+    """助理的传输客户端: 显式给 ``proxy``, 并关掉 ``trust_env``.
+
+    必须自建而不是让 pydantic-ai 托管默认客户端: 默认客户端 ``trust_env=True``, 只认环境变量
+    ``HTTP_PROXY`` / ``HTTPS_PROXY``, 设置页里配的代理对它完全无效 —— 这正是"配了代理助理仍直连"
+    的根因, 也是同一端点翻译能通、助理报 ``Connection error.`` 的原因.
+
+    ``trust_env=False`` 让「关闭使用代理」等于真直连, 不受机器上残留的环境变量影响: 开关必须
+    是确定的, 而不是"看起来关了但环境变量还在生效".
+
+    生命周期归调用方 (``AgentService``): 传入的客户端由 provider 交给 SDK, SDK 不会关外部来的
+    client, 不主动 ``aclose`` 就会漏连接池.
+    """
+    return httpx2.AsyncClient(proxy=proxy, timeout=httpx2.Timeout(_HTTP_TIMEOUT_S), trust_env=False)
+
+
+def build_model(config: AgentConfig, limiter: AgentRateLimiter, *, http_client: httpx2.AsyncClient) -> Model:
+    """``http_client`` 必须是调用方按生效代理构造的那一个 (见 ``build_http_client``); 不在此处
+    自建, 否则装配过程中每多一个模型实例就多一个没人关的连接池.
+
+    不检查 api_key: 为空时由 provider 回退环境变量. 与翻译共用同一套协议映射.
 
     限速包在 model 上而非回合能力上: 会话标题请求不经过 agent 回合, 只有这样它才与回合共桶.
     """
@@ -158,17 +244,20 @@ def build_model(config: AgentConfig, limiter: AgentRateLimiter) -> Model:
             base_url=config.base_url,
             api_key=config.api_key,
             model=config.model,
+            http_client=http_client,
         ),
         limiter,
     )
 
 
-def build_agent(config: AgentConfig, limiter: AgentRateLimiter) -> Agent[AgentDeps, str | DeferredToolRequests] | None:
+def build_agent(
+    config: AgentConfig, limiter: AgentRateLimiter, *, http_client: httpx2.AsyncClient
+) -> Agent[AgentDeps, str | DeferredToolRequests] | None:
     """thinking / max_tokens 经每回合 model_settings 注入; 限速经 model 生效."""
     if not config.api_key:
         return None
     return Agent[AgentDeps, str | DeferredToolRequests](
-        build_model(config, limiter),
+        build_model(config, limiter, http_client=http_client),
         deps_type=AgentDeps,
         output_type=[str, DeferredToolRequests],
         # 使用 instructions 而非 system_prompt: Responses 协议把 agent instructions 放 API 顶层

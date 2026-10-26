@@ -44,7 +44,13 @@ from pydantic_ai.settings import ModelSettings
 from pydantic_ai.usage import RequestUsage, RunUsage
 
 WINDOW_S = 60.0
-"""token 预算的滑动窗口长度 (秒). 上游按分钟计量, 故与之一致."""
+"""token 预算滑动窗口的默认长度 (秒). 上游按分钟计量, 故与之一致; 可用 ``agent.tpm_window_s`` 覆盖."""
+
+DEFAULT_BACKOFF_FACTOR = 2.0
+"""连续限流时冷却时间的默认倍增系数; 1 表示不倍增."""
+
+DEFAULT_MAX_COOLDOWN_S = 900.0
+"""冷却时间的默认上限 (秒); 0 表示不设上限."""
 
 CHARS_PER_TOKEN = 4.0
 """非中日文的字符到 token 换算: 拉丁/数字/标点约 4 字符 1 token."""
@@ -129,18 +135,29 @@ class AgentRateLimiter:
     cooldown_s: float
     """收到限流后的冷却秒数; 期间不放行任何请求. 0 表示不冷却."""
 
+    window_s: float = WINDOW_S
+    """token 预算的统计窗口长度 (秒). 上游按分钟计量, 调大等于更保守地摊平突发."""
+
+    backoff_factor: float = DEFAULT_BACKOFF_FACTOR
+    """连续限流时冷却时间的倍增系数. 1 表示每次都用同一冷却值."""
+
+    max_cooldown_s: float = DEFAULT_MAX_COOLDOWN_S
+    """冷却时间的上限 (秒); 0 表示不设上限."""
+
     _gate: AsyncLimiter = field(init=False, repr=False)
     # (时刻, token 数, 是否已按上游实测校正)
     _spent: deque[tuple[float, int, bool]] = field(default_factory=deque, init=False, repr=False)
     _cooldown_until: float = field(default=0.0, init=False, repr=False)
     _last_input: int = field(default=0, init=False, repr=False)
+    _strikes: int = field(default=0, init=False, repr=False)
+    """连续撞限流的次数, 用于冷却倍增; 任何一次成功响应后归零."""
 
     def __post_init__(self) -> None:
         self._gate = AsyncLimiter(1, 1 / self.rate)
 
     def _evict(self, now: float) -> None:
         """丢掉滑出窗口的记录."""
-        while self._spent and self._spent[0][0] + WINDOW_S <= now:
+        while self._spent and self._spent[0][0] + self.window_s <= now:
             self._spent.popleft()
 
     async def acquire(self, messages: Sequence[ModelMessage], params: ModelRequestParameters | None = None) -> None:
@@ -170,12 +187,16 @@ class AgentRateLimiter:
             if used + need <= tpm or not self._spent:
                 return
             # 最早的一条滑出窗口后重新判断; 它必然未过期 (_evict 刚清过), 故等待时间恒为正
-            await asyncio.sleep(min(self._spent[0][0] + WINDOW_S - now, WINDOW_S))
+            await asyncio.sleep(min(self._spent[0][0] + self.window_s - now, self.window_s))
 
     def record(self, usage: RequestUsage | RunUsage) -> None:
-        """用上游回的真实用量校正最近一次预扣."""
+        """用上游回的真实用量校正最近一次预扣.
+
+        成功拿到用量说明限流已解除, 故把连续撞墙计数归零, 下一次 429 从基础冷却重新起算.
+        """
         total = usage.input_tokens + usage.output_tokens
         self._last_input = usage.input_tokens
+        self._strikes = 0
         for index in range(len(self._spent) - 1, -1, -1):
             at, _, settled = self._spent[index]
             if not settled:
@@ -184,14 +205,25 @@ class AgentRateLimiter:
         self._spent.append((monotonic(), total, True))
 
     def penalize(self, retry_after: float | None = None) -> None:
-        """记一次限流: 冷却期内不放行. 不重发请求, 重试仍归 SDK 与本侧回合之外.
+        """记一次限流: 冷却期内不放行. 连续限流时冷却按倍数递增.
 
         ``retry_after`` 取上游给的 ``Retry-After`` (pydantic-ai 从响应头解析后挂在异常上);
         上游没给时退回配置的 ``cooldown_s``.
+
+        实测 (2026-10-26, 硅基流动): 撞 429 后 154 秒内每次重试仍被拒 —— 上游不是"过了
+        60 秒窗口就清零", 而是按额度速率偿还超额部分 (一次 4 倍超额约需 4.5 分钟), 且全程
+        不发 ``Retry-After``. 用固定冷却值会让客户端每个周期都再撞一次, 故连续失败时倍增
+        (180 → 360 → 720 ...), 封顶 ``max_cooldown_s``; 任何一次成功响应即归零.
         """
-        seconds = self.cooldown_s if retry_after is None else retry_after
-        if seconds > 0:
-            self._cooldown_until = monotonic() + seconds
+        base = self.cooldown_s if retry_after is None else retry_after
+        if base <= 0:
+            return
+        seconds = base * (self.backoff_factor**self._strikes)
+        if self.max_cooldown_s > 0:
+            # 配置若把上限设得比基础值还小, 以基础值为准: 冷却不该因设错上限而变短
+            seconds = max(base, min(seconds, self.max_cooldown_s))
+        self._strikes += 1
+        self._cooldown_until = monotonic() + seconds
 
 
 class RateLimitedModel(WrapperModel):

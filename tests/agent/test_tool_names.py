@@ -8,7 +8,7 @@ from pydantic_ai.messages import ModelResponse, TextPart, ToolCallPart
 from amane.agent.runtime import build_agent
 from amane.agent.tool_names import ToolNameAlias, alias_response_tool_names, canonical_tool_name
 from amane.config import AgentConfig
-from tests.agent.support import no_limit
+from tests.agent.support import no_limit, stub_client
 
 
 @pytest.mark.parametrize(
@@ -79,6 +79,10 @@ def test_alias_response_preserves_other_response_fields() -> None:
 
 
 def test_build_agent_wires_tool_name_alias() -> None:
-    agent = build_agent(AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"), no_limit())
+    agent = build_agent(
+        AgentConfig(api_key="sk-test", model="gpt-4o", base_url="https://example.com/v1"),
+        no_limit(),
+        http_client=stub_client(),
+    )
     assert agent is not None
     assert any(isinstance(cap, ToolNameAlias) for cap in agent.root_capability.capabilities)

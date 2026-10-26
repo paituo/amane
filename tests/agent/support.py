@@ -9,16 +9,27 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
+import httpx2
 from pydantic_ai.capabilities import Capability
 from pydantic_ai.toolsets import FunctionToolset
 
 from amane.agent.limits import AgentRateLimiter
+from amane.agent.runtime import build_http_client
 from amane.agent.tools import AgentDeps
 
 
 def no_limit() -> AgentRateLimiter:
     """装配用的限速器: 不等待, 也就不干扰断言. 每次新建, 避免用例间共享状态."""
     return AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=0.0)
+
+
+def stub_client(proxy: str | None = None) -> httpx2.AsyncClient:
+    """测试用传输客户端: 只为满足 ``build_agent`` / ``build_model`` 的显式依赖.
+
+    这些用例不发真实请求, 因此不必关闭; 但要经 ``build_http_client`` 构造, 否则测的就不是
+    生产实际使用的那个客户端 (``trust_env=False`` 等参数).
+    """
+    return build_http_client(proxy)
 
 
 class ToolCallContext:

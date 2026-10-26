@@ -15,7 +15,7 @@
 
 | 工具 | 契约 |
 |------|------|
-| `search_media` | 按语义/剧情/关键词检索, 回**按相关度排序**的 metadata id + 番号/标题 + `mode` + `degraded`. `name` 不为空时顺带交付 metadata 预设 (行序即相关度顺序) |
+| `search_media` | 按语义/剧情/关键词检索, 回**按相关度排序**的 metadata id + 命中卡片 (`number` / `title` / `plot` 摘要 / `directors` / `actors` / `tags` / `series` / `studio` / `publisher` / `release` / `runtime` / `content_type` / `score` / `matched_queries`) + `mode` + `degraded` + 翻页三件套 (`total` / `has_more` / `next_offset`). 可选 `queries` 多串, `fields` 限定检索列, `limit` 页大小, `threshold` 相对分下限; `name` 不为空时顺带交付 metadata 预设 (行序即相关度顺序) |
 | `sql_explore` | 中间推理; 默认只回样例. `create_view=true` 物化会话内 SavedQuery 供 `inspect_result` 翻页 — 视图是**纯行数组**, 无 entity / `id` 列要求, **不**纳入交付结果 |
 | `sql_deliver` | 面向用户的结果 → `saved_query` + 内存结果缓存. `entity=metadata\|actor` 交付须含主键列 `id`, 可作片库 / 演员筛选并深链; 省略 entity (或 `data`) 交付任意只读结果, 只进入数据页 |
 | `inspect_result` | 按 `saved_query_id` 取行 (交付或探查视图) |
@@ -23,6 +23,43 @@
 **语义查询一律先走 `search_media`**, 不要用 SQL `LIKE` 模拟: 库内标题与剧情存的是**译文** (`plot` 已是中文, 见 [search.md](search.md)), 所以 `LIKE` 并非恒不命中, 但它只认字面 —— 同义改写会漏, 前导 `%` 走不了索引, 全表扫在万级库上必然撞超时, 且覆盖不到演员 / 标签 / 系列. 空结果只说明"没有这个字面片段", 不能据此断言库里没有. 检索栈经 `AgentRuntimeBridge.search` 取用 (返回当前实例, 不是构造时的那个 —— 检索随 `hot.search` 热重建), 未装配 / 开关全关时工具回 `error` 点明原因而不是空命中. `degraded` 为真表示语义路本该参与但没走成, 结果是关键词的 —— 模型须如实说明, 不能当作语义匹配. 交付保序由 `tools.ranked_metadata_sql` 把顺序写进 SQL 实现: Saved Query 的权威是 SQL, 只留在内存缓存里的话列表页重跑就丢了相关度顺序.
 
 语言: 库内标题与剧情是**译文** (本库中文), 既不是原始日文/英文措辞, 也不保证复用用户的说法. 不要把用户的问句先"翻译"成日文/英文关键词再检索, 直接把用户原话交给 `search_media`, 语义路负责抹平措辞差; 命中后按库内原文引号番号与标题, 用户要求时才译.
+
+**命中卡片必须带剧情摘要**: 只回番号+标题时, 模型没有任何依据判断"这条是不是用户说的那部" —— 标题是译者剪出来的短句, 剧情转折 (比如"被带回家辅导功课考上大学") 根本不在标题里. 实测 (session 8, 2026-10-26) 模型拿到的 10 条全是成人片标题, 它据此认定"搜错了", 然后在 170 秒里从训练数据枚举华语片名逐个否定, 最后 18450 字符思考只换来 183 字符回答. 所以 `plot` 按 `PLOT_PREVIEW_CHARS` (240 字) 压平空白后截断, 演员/标签各截前 6/8 项 —— 够判断相关性, 又不至于 20 条撑爆上下文.
+
+**翻页共享同一个排序**: 融合分数是候选集内的 z 标准化, 候选集一变排序就变, 所以不能"按 limit 取"然后"按 offset 再取". `search_media` 每次都以固定深度 `SEARCH_DEPTH` (50) 检索, 再用 `offset` 在**同一个**累积 `ranked` 上切片, 页间不重叠也不漏项. `total` 是这个排序深度 (= `len(ranked)`), **不是**"库里共有多少条相关"; 检索栈只保证召回窗口内的顺序 (见 [search.md](search.md)), 更深的排名没有意义, 所以 `total` 有上限. 模型必须读完 `has_more` 的每一页才能说"库里没有", 且必须说明实际看了多少条.
+
+**长句要拆, 拆哪几个串由模型决定**: 一句剧情描述同时含多个条件 ("离家出走" + "辅导功课" + "考上大学"), 而关键词路是**词项 AND** (`tokenizer.plan_keyword`), 所以整句几乎必然 0 命中, 只剩语义路决定排序. 实测 (2026-10-26, 真实 FTS 索引):
+
+| 查询 | 命中 |
+|------|------|
+| 整句 `在当前的片库中搜素…带回家辅导她功课使她考上大学` | **0** |
+| `离家出走` | 50 |
+| `家庭教师 辅导` | 1 |
+| `考上大学` | 5 (第一条正是 `SCOP-193 / id=5558`) |
+| `带回家 辅导` | 0 |
+
+工具**不做分词、不替模型拆句**: 真正决定"拆成哪几个串"的是模型. 工具只拒收**已知必然 0 命中**的形状 (`QUERY_WORDS_MAX`=3: 一个串超过 3 个空白分词, 在词项 AND 下要求全部同时出现), 拒绝时给出正确拆法示范. 起因见 2026-10-26 实测: 模型前 3 次调用都把整句用空格拼成一个串, 全 0 命中, 白烧两轮才自己改对; 而纯提示词约束挡不住这种写法.
+
+工具接的是模型做不稳的四件事:
+
+- **融合**: `_rrf` (加权倒数排名, k=60, 权重 `1/sqrt(命中数)`) 把多个串的顺序合成一个. 不用硬交集, 因为串之间常不同义 ("辅导功课" vs "家庭教师"), 交集会把只在一路出现的正确条目删掉; 不加权则宽泛串 (50 条) 的名次分会把精确串的第 1 名挤出页外.
+- **跨调用累积**: 模型一次只发一个 tool_call, 所以"混合查询"在运行时表现为多轮调用, 每轮带一个分割串. `AgentDeps.search_rankings` 累积本回合每个串的有序命中, 每次回执都回**累积后的融合排序** —— 否则第 2 轮只看到第 2 个串的结果, 等于把上一轮的证据丢了.
+- **翻页不重检**: `offset>0` 只是"在已有累积排序上切片", 不再跑检索. 旧实现对 `offset>0` 豁免判重, 同一个串被再检索一次又进累积 —— 重复投票把排名整体扰动 (实测翻页第 21 条竟是原第 1 页的末位), 而检索本身幂等, 重跑纯属浪费.
+- **判重与预算**: 见下.
+
+**可调三件事** (`search_media` 的参数, 都不改变工具契约的形状):
+
+| 参数 | 作用 | 落点 |
+|------|------|------|
+| `fields` | 把**关键词路**收窄到指定列 (`number/title/plot/actors/tags/series/studio/publisher`), 未知字段直接拒绝并列出合法值 | `SearchService.search(fields=...)` → `plan_keyword` 只在这些列上 MATCH |
+| `limit` / `offset` | 页大小 (1..50, 默认 20) 与起点; 检索深度恒定 `SEARCH_DEPTH`=50, 切片在深度内做 | 工具层切片 |
+| `threshold` | 相对相关度下限 (0..1), 只保留**该串自己的相对分** ≥ 阈值的候选, 砍掉的条数由 `filtered_out` 报出 | `SearchResult.scores` (见下) |
+
+`queries` 同时接受 `list[str]` 与单个 `str`: 兼容端点常把数组参数写成字符串 (实测出现过), 若只声明 `list[str]` 会被 schema 校验拒掉, 白烧一次往返.
+
+**分数是相对量, 不是概率**: `SearchResult.scores` 与 `ids` 等长, 首名恒 1.0, 其余是它相对首名的比例. 绝对分跨路径不可比 —— 关键词路是 bm25 负值, 向量路是余弦, 融合路是 z 分加常数. 归一化在 `search.service.relative_scores` 一处完成, 阈值因此有一个不随 mode 漂移的语义 (0.5 = 首名的半分). 精确番号命中被 `_exact_first` 强制前置时给 ceiling 分, 避免"排第一但相对分 0.2"的自相矛盾.
+
+**检索有预算**: `SEARCH_CALL_BUDGET`=6 次/回合, 同一串 (按 `_query_key` 归一化, 忽略空白标点大小写) 重复检索**不消耗**预算, 也不报错 —— 直接把累积排序的当前页还回去, 附一句 `note`. 起因是一次真实失败: 模型把同一句换成 23 个近似串, 检索 23 次、耗时 13 分钟, 结果集几乎没变, 最后仍未收敛. 报错会让它空转一轮, 累积页能直接支撑作答. 每串回执里的 `queries[].hint` 给出可行动的下一步 (0 命中 → 换更具体的剧情词 / 多词串 → 拆成单词; 全被阈值砍 → 降阈值), 而不是只给一个 0. 预算用完时工具回"停止检索, 用已有命作答, 要再筛就用 SQL 在 `id IN (...)` 上过滤".
 
 写操作工具按域分组为 `Capability`, **不做延迟载入**: 每个请求都声明全部工具. 兼容端点 (DeepSeek 等) 没有「声明了但不开放」的通道, 逐次载入只能通过修改 `tools` 实现, 而工具定义渲染在 system 之后、对话之前, 每载入一次即重读整段对话前缀; 全量声明的固定前缀恒定不变, 首轮即命中缓存. 不经由 HTTP 自调用. `AgentDeps.bridge` 提供库路径边界 / watcher / 取消运行中任务.
 
@@ -105,3 +142,9 @@
 `AgentService` 挂载于 `AppRuntime`: `_rebuild()` 按 `hot.agent` 重建工厂, **不清除** ResultCache; bootstrap 装配 `bridge` (safe_dirs / watcher / 动态 Worker 取消 / `FeedService.poll_one`).
 
 上游协议由 `hot.agent.api_type` 选择, 模型构造与翻译共用 `llm/model.py::build_model`; `base_url` / `api_key` / `model` 原样交给对应 Provider (Anthropic 需填 Anthropic 端点, 无隐式改写). 身份与规则经 agent `instructions` 注入而**不是** `system_prompt`: Responses 协议把 agent instructions 放在 API 顶层 `instructions` 字段, 服务端插在 `input` 之前; `system_prompt` 会变成 `input` 里的 system 消息, 于是各 capability 的注意事项反而排在身份定位之前. 思考强度: 全局 `hot.agent.thinking` 为默认 (`None` = 不传), 会话覆盖在 `meta.json`; 每回合经由 `model_settings` 注入 thinking 与 `hot.agent.max_tokens`. 运行上限由 `agent/runtime.py::AGENT_USAGE_LIMITS` 的 `request_limit` 约束单回合请求次数, 工具与输出校验的重试预算为 `Agent.retries`, 两者相互独立. 整回合墙钟上限取 `hot.agent.request_timeout`; 模型请求的限速 (每秒请求数 / 每分钟 token 预算 / 限流冷却) 由 `agent/limits.py::RateLimitedModel` 包在 model 上, 全部会话与会话标题请求共用一个 `AgentService.request_limiter()`. 传输层重试、超时与失败回合的历史写入见 [llm-resilience.md](llm-resilience.md).
+
+**输出上限**: `hot.agent.max_tokens` 默认 16384, 硬上限 65536. 这个字段不只决定"会不会被 length 截断", 还会改变模型的**调用行为**. 2026-10-26 实测 (SiliconFlow + `XingChenAGI/Xing4.0-29B`, 同一 payload 只改该字段): 4096 / 8192 / 16384 / 32768 / 65536 全部正常返回 `tool_calls`, 思考只有 70~270 字符; 一旦填到 128000, 模型以 `finish_reason=stop` 结束且**零个 tool_call** —— 它把调用写成 markdown 文本塞进 reasoning 就收工, 前端表现为"思考很久却什么都没做". 故默认值从 128000 降到 16384, 并用 `le=65536` 挡住手填回去. 排查同类症状先看 `events.jsonl`: 有没有 `TOOL_CALL_START`, 以及两段 `REASONING_MESSAGE_START`→`END` 的墙钟跨度 (正常应是秒级).
+
+**片库事实**: `runtime.py::_SYSTEM` 的 `Library facts` 段声明三件事 —— 片库以日本成人影片为主 (番号寻址), 检索结果全是成人片是该查询的**正常形态**而非搜错; 数据库是库内内容的唯一事实来源, 检索未命中就如实说"库里没有", **禁止**凭记忆列举《…》当作库内命中; 只搜一次, 拿到排序结果就在其上收敛, 不要换措辞反复重试. 缺这一段时 (session 8, 2026-10-26) 模型看到十条日本成人片结果判为 "This is strange", 转去世界知识里逐个猜华语片名, 第二段思考烧掉 170 秒 / 18450 字符却只产出 183 字符回答.
+
+**代理**: `hot.agent.use_proxy` 是总闸, `hot.agent.proxy` 是专用地址, 都空回退 `hot.network.proxy` (解析在 `AgentConfig.resolved_proxy`, 语义与站点级 `SiteConfig.use_proxy` 一致). 助理**自建**传输客户端 (`runtime.py::build_http_client`) 并显式 `trust_env=False`: pydantic-ai 托管的默认客户端只认环境变量 `HTTP_PROXY` / `HTTPS_PROXY`, 设置页里配的代理对它无效 —— 表现为"同一端点翻译能通、助理恒报 `Connection error.`". 客户端由 `AgentService` 持有: 每次 `rebuild` 换新, 旧的进**退休队列**而不是就地关闭 (保存设置可能发生在另一标签页的回合进行中, 立刻 `aclose` 会让那边的请求失败), 队列超过 8 个才关最老的; 进程退出由 `AppSession.aclose` 全关 (provider 不会关外部传入的 client). 自检 (`probe/llm.py`) 呈现与实际请求同一个生效代理, 否则会出现"探针通过而会话不通".

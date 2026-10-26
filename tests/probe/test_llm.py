@@ -129,6 +129,40 @@ async def test_upstream_error_is_surfaced_verbatim(make_ctx, monkeypatch):
 
 
 @pytest.mark.asyncio(loop_scope="function")
+async def test_agent_section_shows_effective_proxy(make_ctx, monkeypatch):
+    """自检呈现的必须是**实际生效**的代理, 不是全局代理.
+
+    呈现与实际不一致时, 自检会给出"端点可达"的假绿: 探针走了别的出口, 会话仍在直连里失败.
+    """
+
+    async def _fake_request(model, messages):
+        return _Response()
+
+    async def _first_detail(ctx) -> str:
+        """只取首条事件 (端点 info). 它之前还没建客户端, 故不必显式收尾生成器."""
+        return (await anext(probe_agent(ctx))).detail or ""
+
+    monkeypatch.setattr("amane.probe.llm.model_request", _fake_request)
+    hot = HotSettings()
+    hot.agent.api_key = "sk-test"
+    hot.agent.model = "gpt-4o-mini"
+    hot.network.proxy = "socks5h://127.0.0.1:10808"
+
+    # 未填专用地址 → 回退全局代理
+    assert "socks5h://127.0.0.1:10808" in await _first_detail(make_ctx(hot))
+
+    # 专用地址优先于全局
+    hot.agent.proxy = "http://127.0.0.1:7890"
+    assert "http://127.0.0.1:7890" in await _first_detail(make_ctx(hot))
+
+    # 总闸关闭: 呈现 "直连", 不能被全局代理的值盖住
+    hot.agent.use_proxy = False
+    detail = await _first_detail(make_ctx(hot))
+    assert "直连" in detail
+    assert "socks5h://127.0.0.1:10808" not in detail
+
+
+@pytest.mark.asyncio(loop_scope="function")
 async def test_agent_section_uses_its_own_credentials(make_ctx, monkeypatch):
     """agent 与 llm 的凭据互相独立: 只配 llm 不该让智能体测试通过."""
 
@@ -277,7 +311,7 @@ async def test_agent_effect_reports_a_real_turn_with_tool_calls(make_ctx, monkey
         return _Response()
 
     monkeypatch.setattr("amane.probe.llm.model_request", _fake_request)
-    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter: _FakeAgent())
+    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter, **_: _FakeAgent())
     hot = HotSettings()
     hot.agent.api_key = "sk-test"
 
@@ -314,7 +348,7 @@ async def test_agent_effect_warns_when_model_skips_tools(make_ctx, monkeypatch):
         return _Response()
 
     monkeypatch.setattr("amane.probe.llm.model_request", _fake_request)
-    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter: _FakeAgent())
+    monkeypatch.setattr("amane.agent.runtime.build_agent", lambda config, limiter, **_: _FakeAgent())
     hot = HotSettings()
     hot.agent.api_key = "sk-test"
 

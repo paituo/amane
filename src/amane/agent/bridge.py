@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Protocol
 
 if TYPE_CHECKING:
     from ..db.models import Library
+    from ..enums import SearchField
     from ..search import SearchResult
 
 
@@ -33,7 +34,13 @@ class SearchGateway(Protocol):
     否则会一直用着被 ``aclose`` 掉的旧栈.
     """
 
-    async def search(self, query: str, *, limit: int) -> SearchResult: ...
+    async def search(
+        self,
+        query: str,
+        *,
+        limit: int,
+        fields: Sequence[SearchField] | None = None,
+    ) -> SearchResult: ...
 
 
 @dataclass

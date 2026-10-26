@@ -281,3 +281,51 @@ def test_model_exposes_wrapped_model() -> None:
     """包装后仍是 Model: 装配与自检按 Model 用它."""
     model = RateLimitedModel(FunctionModel(function=lambda m, i: ModelResponse(parts=[TextPart("")])), no_limit())
     assert isinstance(model, Model)
+
+
+def test_penalize_escalates_on_consecutive_limits(clock: Clock) -> None:
+    """连续撞限流时冷却按倍数递增.
+
+    实测 (2026-10-26 硅基流动) 撞 429 后 154 秒内重试仍被拒, 且不发 `Retry-After`: 用固定
+    冷却值会让客户端每个周期都再撞一次, 白烧配额.
+    """
+    limiter = AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=180.0)
+    waits = []
+    for _ in range(3):
+        limiter.penalize()
+        waits.append(round(limiter._cooldown_until - clock.now, 3))
+    assert waits == [180.0, 360.0, 720.0]
+
+
+def test_penalize_caps_escalation(clock: Clock) -> None:
+    """倍增到上限即停: 日额度耗尽时不能让回合无限等下去."""
+    limiter = AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=180.0, max_cooldown_s=900.0)
+    for _ in range(6):
+        limiter.penalize()
+    assert pytest.approx(limiter._cooldown_until - clock.now) == 900.0
+
+
+def test_cap_below_base_never_shortens_cooldown(clock: Clock) -> None:
+    """上限配得比基础值还小时以基础值为准: 设错上限不该让冷却变短."""
+    limiter = AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=180.0, max_cooldown_s=60.0)
+    limiter.penalize()
+    assert pytest.approx(limiter._cooldown_until - clock.now) == 180.0
+
+
+def test_success_resets_cooldown_escalation(clock: Clock) -> None:
+    """成功一次即回到基础冷却: 恢复后不该继续按倍增惩罚."""
+    limiter = AgentRateLimiter(rate=100.0, tpm=None, cooldown_s=180.0)
+    limiter.penalize()
+    limiter.penalize()
+    limiter.record(RequestUsage(input_tokens=10, output_tokens=1))
+    limiter.penalize()
+    assert pytest.approx(limiter._cooldown_until - clock.now) == 180.0
+
+
+@pytest.mark.asyncio
+async def test_budget_window_length_is_configurable(clock: Clock) -> None:
+    """窗口长度按配置生效: 30 秒窗口下 25 秒前的记录再等 5 秒就滑出, 不必等到 60 秒."""
+    limiter = AgentRateLimiter(rate=100.0, tpm=1_000, cooldown_s=0.0, window_s=30.0)
+    limiter._spent.append((clock.now - 25.0, 800, True))
+    await limiter.acquire(_messages("一" * 500))
+    assert clock.slept and pytest.approx(sum(clock.slept), abs=0.2) == 5.0

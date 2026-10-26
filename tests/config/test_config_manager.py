@@ -11,6 +11,7 @@ from pydantic import ValidationError
 from amane.app.bootstrap import build_safe_dirs
 from amane.config import (
     SAFE_DIRS_ALLOW_ALL,
+    AgentConfig,
     BrowserConfig,
     ColdSettings,
     ConfigManager,
@@ -363,6 +364,57 @@ class TestSiteProxy:
         cfg = SiteConfig()
         assert cfg.proxy is None
         assert cfg.use_proxy is True
+
+
+class TestAgentProxy:
+    """智能体的代理字段与站点级同构: 开关是总闸, 专用地址是覆盖, 都空回退全局."""
+
+    @pytest.mark.parametrize(
+        "value",
+        ["http://127.0.0.1:7890", "socks5://127.0.0.1:1080", "socks5h://user:pass@proxy.example:1080"],
+    )
+    def test_accepts_supported_schemes(self, value: str):
+        assert AgentConfig(proxy=value).proxy == value
+
+    @pytest.mark.parametrize("value", ["", "   "])
+    def test_blank_becomes_unset(self, value: str):
+        assert AgentConfig(proxy=value).proxy is None
+
+    @pytest.mark.parametrize("value", ["127.0.0.1:1080", "ftp://127.0.0.1:1080", "socks5://"])
+    def test_rejects_invalid(self, value: str):
+        # 无协议的地址无法区分 http 与 socks, 必须在保存时报错而不是等到请求才失败
+        with pytest.raises(ValidationError, match="代理地址必须带协议"):
+            AgentConfig(proxy=value)
+
+    def test_defaults(self):
+        cfg = AgentConfig()
+        assert cfg.proxy is None
+        assert cfg.use_proxy is True
+
+    def test_resolved_proxy_falls_back_to_global(self):
+        """未填专用地址时用 ``network.proxy`` —— 与「留空使用全局代理」的文案一致."""
+        assert AgentConfig().resolved_proxy("socks5h://127.0.0.1:10808") == "socks5h://127.0.0.1:10808"
+        assert AgentConfig(use_proxy=False).resolved_proxy("socks5h://127.0.0.1:10808") is None
+
+
+class TestAgentMaxTokens:
+    """输出上限既是截断预算也是调用行为开关: 过大时模型会退化成零 tool_call."""
+
+    def test_default_is_16k(self):
+        assert AgentConfig().max_tokens == 16_384
+
+    def test_accepts_up_to_cap(self):
+        assert AgentConfig(max_tokens=65_536).max_tokens == 65_536
+
+    @pytest.mark.parametrize("value", [128_000, 200_000])
+    def test_legacy_oversized_value_is_clamped_not_rejected(self, value: int):
+        """旧配置写着 128000 是常态 (曾是默认值); 夹住而不是报错, 否则升级后服务起不来."""
+        assert AgentConfig(max_tokens=value).max_tokens == 65_536
+
+    def test_schema_advertises_cap(self):
+        prop = AgentConfig.model_json_schema()["properties"]["max_tokens"]
+        assert prop["maximum"] == 65_536
+        assert prop["default"] == 16_384
 
 
 class TestScrapingPriorityMigration:

@@ -769,6 +769,22 @@ export const AgentConfigSchema = {
             title: 'Base Url',
             default: 'https://api.openai.com/v1'
         },
+        use_proxy: {
+            type: 'boolean',
+            title: 'Use Proxy',
+            default: true
+        },
+        proxy: {
+            anyOf: [
+                {
+                    type: 'string'
+                },
+                {
+                    type: 'null'
+                }
+            ],
+            title: 'Proxy'
+        },
         model: {
             type: 'string',
             title: 'Model',
@@ -786,9 +802,10 @@ export const AgentConfigSchema = {
         },
         max_tokens: {
             type: 'integer',
+            maximum: 65536,
             minimum: 1,
             title: 'Max Tokens',
-            default: 128000
+            default: 16384
         },
         max_retries: {
             anyOf: [
@@ -838,12 +855,33 @@ export const AgentConfigSchema = {
             ],
             title: 'Tpm Limit'
         },
+        tpm_window_s: {
+            type: 'number',
+            maximum: 600,
+            minimum: 10,
+            title: 'Tpm Window S',
+            default: 60
+        },
         rate_limit_cooldown_s: {
             type: 'number',
-            maximum: 900,
+            maximum: 3600,
             minimum: 0,
             title: 'Rate Limit Cooldown S',
-            default: 60
+            default: 180
+        },
+        rate_limit_backoff_factor: {
+            type: 'number',
+            maximum: 10,
+            minimum: 1,
+            title: 'Rate Limit Backoff Factor',
+            default: 2
+        },
+        rate_limit_max_cooldown_s: {
+            type: 'number',
+            maximum: 7200,
+            minimum: 0,
+            title: 'Rate Limit Max Cooldown S',
+            default: 900
         },
         sql_timeout_ms: {
             type: 'integer',
@@ -3550,12 +3588,16 @@ export const HotSettingsSchema = {
             default: {
                 api_type: 'response',
                 base_url: 'https://api.openai.com/v1',
+                use_proxy: true,
                 model: 'gpt-4o-mini',
-                max_tokens: 128000,
+                max_tokens: 16384,
                 max_retries: 0,
                 request_timeout: 600,
                 rate_limit: 2,
-                rate_limit_cooldown_s: 60,
+                tpm_window_s: 60,
+                rate_limit_cooldown_s: 180,
+                rate_limit_backoff_factor: 2,
+                rate_limit_max_cooldown_s: 900,
                 sql_timeout_ms: 5000,
                 result_cache_ttl_s: 3600,
                 result_cache_max_entries: 64,

@@ -6,7 +6,7 @@ import pytest
 
 from amane.agent.runtime import build_agent, parse_session_thinking, resolve_model_settings
 from amane.config import AgentConfig, AgentThinkingMode
-from tests.agent.support import no_limit
+from tests.agent.support import no_limit, stub_client
 
 
 @pytest.mark.parametrize(
@@ -17,12 +17,12 @@ from tests.agent.support import no_limit
     ],
 )
 def test_build_agent_returns_none_without_api_key(config: AgentConfig) -> None:
-    assert build_agent(config, no_limit()) is None
+    assert build_agent(config, no_limit(), http_client=stub_client()) is None
 
 
 def test_build_agent_ignores_legacy_enabled_field() -> None:
     config = AgentConfig.model_validate({"enabled": False, "api_key": "test-key"})
-    assert build_agent(config, no_limit()) is not None
+    assert build_agent(config, no_limit(), http_client=stub_client()) is not None
 
 
 @pytest.mark.parametrize(

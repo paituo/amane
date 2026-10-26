@@ -863,6 +863,10 @@ class AgentThinkingMode(StrEnum):
     XHIGH = "xhigh"
 
 
+_MAX_TOKENS_CAP = 65_536
+"""``agent.max_tokens`` 的硬上限. 超过此值部分模型会退化 (零 tool_call), 见字段文档."""
+
+
 class AgentConfig(BaseModel):
     """与 llm 翻译 section 分离: 凭据/模型/限速各自独立."""
 
@@ -871,12 +875,31 @@ class AgentConfig(BaseModel):
     base_url: str = "https://api.openai.com/v1"
     """可指向自建/第三方代理; anthropic 须填 Anthropic 端点."""
 
+    use_proxy: bool = True
+    """``False`` 表示直连: 专用代理与全局 ``network.proxy`` 都不使用, 也不读环境变量代理.
+
+    上游在国内 (硅基流动 / 各家中转) 时常被线路或中间盒掐在 TLS 握手, 表现为
+    ``Connection error.`` 且只在助理侧复现 —— 翻译与刮削走自建客户端本来就带代理, 助理
+    此前交给 SDK 默认客户端, 而它只认环境变量.
+    """
+
+    proxy: str | None = None
+    """智能体专用代理; 留空使用 ``network.proxy``. 翻译 / 刮削各自独立, 互不影响."""
+
     model: str = "gpt-4o-mini"
     thinking: AgentThinkingMode | None = None
     """新建会话的回退默认; None 表示不传 thinking. 会话可在 meta 覆盖."""
 
-    max_tokens: int = Field(default=128_000, ge=1)
-    """单次回复的输出上限. 超过模型上限时上游拒绝请求."""
+    max_tokens: int = Field(default=16_384, ge=1, le=_MAX_TOKENS_CAP)
+    """单次回复的输出上限.
+
+    上限 65536 而非留空: 该值不止是"防截断", 还会改变模型的调用行为. 2026-10-26 实测
+    (SiliconFlow + Xing4.0-29B, 同一 payload 只改本字段): 4096 / 8192 / 16384 / 32768 / 65536
+    全部正常返回 ``tool_calls`` 且思考只有 70~270 字符; 一旦填到 128000, 模型概率性地以
+    ``finish_reason=stop`` 结束、**0 个 tool_call**, 把工具调用写成 markdown 文本塞进思考里,
+    用户看到的就是"思考很久却什么都没做". 故默认值从 128000 降到 16384 —— 远超常规回复所需,
+    又远离该退化区间; 上限挡住手填回 128000.
+    """
 
     max_retries: int | None = Field(default=0, ge=0, le=10)
     """传输层重试次数, 经 ``ModelSettings['max_retries']`` 按请求下发, 对 OpenAI / Anthropic 等协议一并生效. None 表示沿用 SDK 客户端自身配置 (OpenAI 默认 2 次重试).
@@ -895,13 +918,39 @@ class AgentConfig(BaseModel):
 
     上游按 token 计量时只限请求数不够: 助理全量声明工具且历史只增不减, 单请求常烧上万
     input token, 一分钟几个请求就能打穿限额. 超预算时在请求前等到窗口滑出, 不等到撞 429.
+
+    实测 (2026-10-26, 硅基流动免费模型): 真正卡人的就是这一项, 阈值约 128000/分钟
+    (窗口内 125555 通过、131016 拒绝), 串行 45 RPM 即触顶 —— 频率根本不是瓶颈.
     """
 
-    rate_limit_cooldown_s: float = Field(default=60.0, ge=0, le=900)
+    tpm_window_s: float = Field(default=60.0, ge=10, le=600)
+    """token 预算的统计窗口长度 (秒). 上游按分钟计量, 故默认与之一致.
+
+    调大等于更保守地摊平突发 (同样预算分摊到更长跨度), 调小则允许短时冲刺.
+    上游额度是按速率偿还的, 窗口设得比上游短会让本地估算比上游宽松, 更容易撞 429.
+    """
+
+    rate_limit_cooldown_s: float = Field(default=180.0, ge=0, le=3600)
     """收到限流 (429) 后的冷却秒数, 期间不发起任何模型请求 (含会话标题). 0 表示不冷却.
 
-    上游限流窗口多为 60 秒, 冷却期内继续请求只会再撞一次, 故默认与之一致; 上游在响应头给了
-    ``Retry-After`` 时以它为准, 本值只作回退.
+    实测 (2026-10-26, 硅基流动): 撞 429 后 154 秒内每次重试仍被拒 —— 上游不发
+    ``Retry-After``, 也不是"过 60 秒就恢复", 而是按额度速率偿还超额 (4 倍超额要 4.5 分钟).
+    60 秒的冷却必然再撞一次, 故默认 180. 连续撞墙时按 ``rate_limit_backoff_factor`` 倍增;
+    上游真给了 ``Retry-After`` 时以它为准, 本值只作回退.
+    """
+
+    rate_limit_backoff_factor: float = Field(default=2.0, ge=1.0, le=10.0)
+    """连续撞限流时冷却时间的倍增系数. 1 表示每次都只用基础冷却.
+
+    冷却结束就重试、再撞、再等, 会让每个周期都白烧一次配额; 递增(180→360→720…)可以等到
+    上游真正恢复. 任何一次成功响应后计数归零, 恢复即回到基础值.
+    """
+
+    rate_limit_max_cooldown_s: float = Field(default=900.0, ge=0, le=7200)
+    """冷却时间的上限 (秒). 0 表示不设上限.
+
+    日额度类耗尽会成小时不可用, 让回合无限期挂着比明确失败更糟; 到顶后仍失败就该由回合
+    超时与错误提示接管.
     """
 
     sql_timeout_ms: int = Field(default=5_000, ge=50, le=60_000, json_schema_extra={"x-hidden": True})
@@ -920,12 +969,34 @@ class AgentConfig(BaseModel):
 
     history_max_sessions: int = Field(default=32, ge=1, le=500, json_schema_extra={"x-hidden": True})
 
+    @field_validator("proxy")
+    @classmethod
+    def _validate_proxy(cls, v: str | None) -> str | None:
+        return _validate_proxy_url(v)
+
+    def resolved_proxy(self, fallback: str | None) -> str | None:
+        """生效代理: 关闭开关即直连; 未填专用地址时回退全局 ``network.proxy``.
+
+        语义与站点级 ``SiteConfig.use_proxy`` 一致: 开关是总闸, 专用地址是覆盖.
+        ``fallback`` 由调用方给出 —— 本 section 不认识 ``network``, 免得两个配置对象互指.
+        """
+        if not self.use_proxy:
+            return None
+        return self.proxy or fallback or None
+
     @model_validator(mode="before")
     @classmethod
     def _drop_legacy_fields(cls, data: Any) -> Any:
-        """丢弃已移除的 enabled (max_retries 已恢复为正式字段)."""
+        """丢弃已移除的 enabled (max_retries 已恢复为正式字段), 并把遗留的超大 ``max_tokens`` 夹回上限.
+
+        夹而不是报错: 旧配置里写着 128000 是常态 (那是本字段曾经的默认值), 若直接判非法,
+        升级后整个配置加载失败、服务起不来. 夹住后下次保存即写回合法值.
+        """
         if isinstance(data, dict):
             data.pop("enabled", None)
+            tokens = data.get("max_tokens")
+            if isinstance(tokens, int) and not isinstance(tokens, bool) and tokens > _MAX_TOKENS_CAP:
+                data["max_tokens"] = _MAX_TOKENS_CAP
         return data
 
 

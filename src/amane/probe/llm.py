@@ -69,11 +69,10 @@ class _Endpoint:
 
 
 async def _probe(
-    ctx: ProbeContext, endpoint: _Endpoint, *, effect: EffectFn | None = None
+    ctx: ProbeContext, endpoint: _Endpoint, *, proxy: str | None, effect: EffectFn | None = None
 ) -> AsyncIterator[ProbeEvent]:
     rec = ctx.rec
-    proxy = ctx.hot.network.proxy or "直连"
-    detail = f"协议 {endpoint.api_type} · 模型 {endpoint.model.strip() or '(未填写)'} · {proxy}"
+    detail = f"协议 {endpoint.api_type} · 模型 {endpoint.model.strip() or '(未填写)'} · {proxy or '直连'}"
     if endpoint.extra:
         detail = f"{detail} · {endpoint.extra}"
     yield rec.info(f"{endpoint.label}端点 {endpoint.base_url}", detail=detail)
@@ -81,7 +80,7 @@ async def _probe(
     auth: GuestTokenAuth | None = None
     api_key = endpoint.api_key
     if endpoint.auth_mode is LLMAuthMode.GUEST_TOKEN:
-        auth = GuestTokenAuth(load_or_create_device_id(ctx.data_dir / DEVICE_ID_FILENAME), proxy=ctx.hot.network.proxy)
+        auth = GuestTokenAuth(load_or_create_device_id(ctx.data_dir / DEVICE_ID_FILENAME), proxy=proxy)
         api_key = GUEST_API_KEY
         yield rec.info(
             "游客 token 模式",
@@ -97,10 +96,9 @@ async def _probe(
         yield rec.error("未填写模型名", detail="空模型名会让 provider 在构造请求时才报错")
         return
 
-    # 客户端归本探针所有: 与翻译路径同构 (proxy + 超时), 用完即关, 不挂到运行时身上.
-    client = AsyncClient(
-        auth=auth, proxy=ctx.hot.network.proxy, timeout=Timeout(_REQUEST_TIMEOUT_S), follow_redirects=True
-    )
+    # 客户端归本探针所有: 与真实路径同构 (proxy + 超时), 用完即关, 不挂到运行时身上.
+    # 传的是**生效代理**而不是全局代理: 助理有自己的开关, 呈现的地址必须与实际发出的请求一致.
+    client = AsyncClient(auth=auth, proxy=proxy, timeout=Timeout(_REQUEST_TIMEOUT_S), follow_redirects=True)
     try:
         model = build_model(
             endpoint.api_type,
@@ -205,30 +203,34 @@ async def _agent_effect(ctx: ProbeContext, _model: Model) -> AsyncIterator[Probe
         return
 
     # 延迟导入: 只有这条真实回合才需要助理那一套 (工具集 / 沙箱 / 执行器).
-    from ..agent.runtime import build_agent
+    from ..agent.runtime import build_agent, build_http_client
     from ..agent.tools import AgentDeps
 
     cfg = ctx.hot.agent
     # 复用助理的限速器: 自检回合与真实回合共桶, 否则自检自己就会撞上 token 限额
-    agent = build_agent(cfg, service.request_limiter())
-    if agent is None:
-        yield ctx.rec.warn("真实回合跳过", detail="凭据为空, 助理装配为空")
-        return
-
-    deps = AgentDeps(repo=runtime.repo, executor=service.executor, session_id=0, sql_timeout_ms=cfg.sql_timeout_ms)
-    started = perf_counter()
+    client = build_http_client(cfg.resolved_proxy(ctx.hot.network.proxy))
     try:
-        # 回合里可能有多轮工具往返, 单独给一个比单次请求宽松的上限.
-        result = await asyncio.wait_for(agent.run(_AGENT_PROMPT, deps=deps), timeout=_AGENT_TIMEOUT_S)
-    except TimeoutError:
-        yield ctx.rec.warn(
-            f"真实回合超时 ({_AGENT_TIMEOUT_S:.0f}s)",
-            detail="助理没有在时限内答复: 上游太慢, 或工具往返卡住",
-        )
-        return
-    except Exception as e:
-        yield ctx.rec.warn("真实回合失败", detail=describe_error(e))
-        return
+        agent = build_agent(cfg, service.request_limiter(), http_client=client)
+        if agent is None:
+            yield ctx.rec.warn("真实回合跳过", detail="凭据为空, 助理装配为空")
+            return
+
+        deps = AgentDeps(repo=runtime.repo, executor=service.executor, session_id=0, sql_timeout_ms=cfg.sql_timeout_ms)
+        started = perf_counter()
+        try:
+            # 回合里可能有多轮工具往返, 单独给一个比单次请求宽松的上限.
+            result = await asyncio.wait_for(agent.run(_AGENT_PROMPT, deps=deps), timeout=_AGENT_TIMEOUT_S)
+        except TimeoutError:
+            yield ctx.rec.warn(
+                f"真实回合超时 ({_AGENT_TIMEOUT_S:.0f}s)",
+                detail="助理没有在时限内答复: 上游太慢, 或工具往返卡住",
+            )
+            return
+        except Exception as e:
+            yield ctx.rec.warn("真实回合失败", detail=describe_error(e))
+            return
+    finally:
+        await client.aclose()
 
     elapsed = int((perf_counter() - started) * 1000)
     output = str(result.output or "").strip()
@@ -285,6 +287,8 @@ async def probe_llm(ctx: ProbeContext) -> AsyncIterator[ProbeEvent]:
             model=cfg.model,
             extra=f"翻译字段 {fields} · 限速 {cfg.rate_limit:g}/s",
         ),
+        # 翻译没有独立代理开关, 恒用全局代理
+        proxy=ctx.hot.network.proxy,
         effect=_translation_effect,
     ):
         yield event
@@ -306,6 +310,8 @@ async def probe_agent(ctx: ProbeContext) -> AsyncIterator[ProbeEvent]:
             model=cfg.model,
             extra=f"输出上限 {cfg.max_tokens} · {thinking}",
         ),
+        # 助理有自己的开关与专用地址: 呈现的必须是真正生效的那个, 否则"探针通过但会话不通"
+        proxy=cfg.resolved_proxy(ctx.hot.network.proxy),
         effect=_agent_effect,
     ):
         yield event

@@ -42,11 +42,35 @@ _REQUESTED_MODES: dict[SearchType, SearchMode] = {
 class SearchResult(BaseModel):
     mode: SearchMode
     ids: list[int] = Field(default_factory=list)
+    scores: list[float] = Field(default_factory=list)
+    """与 ``ids`` 等长的**相对相关度**, 首名恒 1.0, 其余是它相对首名的比例 (0..1).
+
+    绝对分不可跨 mode 比较: 关键词路是 bm25 负值, 向量路是余弦, 融合路是 z 分加常数.
+    调用方要"多相关"这个判断时只能看相对量, 所以统一在这里归一, 顺带让阈值有一个不随
+    路径漂移的语义 (0.5 = 首名的一半分).
+    """
+
     total: int = 0
     """``KEYWORD`` 为索引命中数; ``VECTOR`` / ``HYBRID`` 为候选窗口内的命中数, 不是全库精确计数."""
 
     degraded: bool = False
     """向量路本该参与但不可用 (模型/端点/扩展异常), 已退回关键词."""
+
+
+def relative_scores(raw: Sequence[float]) -> list[float]:
+    """把任意口径的原始分压成 0..1 相对分, 首名恒 1.0.
+
+    原始分只保证"越大越相关", 不保证量纲: bm25 越大越好的前提是已取负, 余弦本来就是 0..1,
+    融合分是 z 分加常数. 唯一跨路径稳定的是比值, 所以这里只做归一, 不试图换算成概率.
+    """
+    if not raw:
+        return []
+    top = max(raw)
+    if top <= 0.0:
+        # 整批都没有正向信号 —— 纯 LIKE 回退就是这种情形 (计数型分数统一给 0). 顺序本身仍有
+        # 信息 (它来自检索栈的排序), 所以按名次线性衰减, 而不是全判 0: 全 0 会让阈值一次砍光.
+        return [1.0 - index / (len(raw) + 1) for index in range(len(raw))]
+    return [max(0.0, min(1.0, value / top)) for value in raw]
 
 
 def _z_scores(values: Sequence[float]) -> list[float]:
@@ -170,16 +194,40 @@ class SearchService:
 
         if resolved is SearchMode.KEYWORD:
             ranked = self._exact_first(exact_ids, (hit.metadata_id for hit in keyword_hits))
-            return SearchResult(mode=resolved, ids=ranked[:limit], total=len(ranked), degraded=degraded)
+            page = ranked[:limit]
+            raw = {hit.metadata_id: hit.score for hit in keyword_hits}
+            return SearchResult(
+                mode=resolved,
+                ids=page,
+                scores=self._scores_for(page, exact_ids, raw),
+                total=len(ranked),
+                degraded=degraded,
+            )
 
         vector_hits, vector_failed = await self._vector_hits(text)
         degraded = degraded or vector_failed
         if not vector_hits and vector_failed:
             ranked = self._exact_first(exact_ids, (hit.metadata_id for hit in keyword_hits))
-            return SearchResult(mode=SearchMode.KEYWORD, ids=ranked[:limit], total=len(ranked), degraded=True)
+            page = ranked[:limit]
+            raw = {hit.metadata_id: hit.score for hit in keyword_hits}
+            return SearchResult(
+                mode=SearchMode.KEYWORD,
+                ids=page,
+                scores=self._scores_for(page, exact_ids, raw),
+                total=len(ranked),
+                degraded=True,
+            )
         if resolved is SearchMode.VECTOR:
             ordered = self._exact_first(exact_ids, (hit.metadata_id for hit in vector_hits))
-            return SearchResult(mode=resolved, ids=ordered[:limit], total=len(ordered), degraded=degraded)
+            page = ordered[:limit]
+            raw = {hit.metadata_id: hit.similarity for hit in vector_hits}
+            return SearchResult(
+                mode=resolved,
+                ids=page,
+                scores=self._scores_for(page, exact_ids, raw),
+                total=len(ordered),
+                degraded=degraded,
+            )
         if not self._config.fused:
             # 两路各自排序后拼接去重: 关键词结果优先, 语义结果补齐.
             merged = self._exact_first(
@@ -189,10 +237,41 @@ class SearchService:
                     *(hit.metadata_id for hit in vector_hits),
                 ),
             )
-            return SearchResult(mode=resolved, ids=merged[:limit], total=len(merged), degraded=degraded)
+            page = merged[:limit]
+            raw = {hit.metadata_id: hit.similarity for hit in vector_hits}
+            raw.update({hit.metadata_id: hit.score for hit in keyword_hits})
+            return SearchResult(
+                mode=resolved,
+                ids=page,
+                scores=self._scores_for(page, exact_ids, raw),
+                total=len(merged),
+                degraded=degraded,
+            )
 
         fused = self._fuse(keyword_hits, vector_hits, exact_ids)
-        return SearchResult(mode=SearchMode.HYBRID, ids=fused[:limit], total=len(fused), degraded=degraded)
+        page = fused[:limit]
+        return SearchResult(
+            mode=SearchMode.HYBRID,
+            ids=[metadata_id for metadata_id, _ in page],
+            scores=relative_scores([score for _, score in page]),
+            total=len(fused),
+            degraded=degraded,
+        )
+
+    @staticmethod
+    def _scores_for(
+        ids: Sequence[int],
+        exact_ids: Sequence[int],
+        raw: dict[int, float],
+    ) -> list[float]:
+        """按**最终顺序**取原始分再归一; 精确番号命中给一个高出全场的分数.
+
+        精确命中是被 ``_exact_first`` 强制前移的, 若分数沿用它在关键词路里的 bm25, 就会出现
+        "排第一但相对分 0.2"的自相矛盾. 给它 ceiling 既保住排序, 也让首名恒为 1.0.
+        """
+        exact = set(exact_ids)
+        ceiling = max(raw.values(), default=0.0) + 1.0
+        return relative_scores([ceiling if metadata_id in exact else raw.get(metadata_id, 0.0) for metadata_id in ids])
 
     async def _exact_ids(
         self,
@@ -259,8 +338,11 @@ class SearchService:
         keyword_hits: Sequence[KeywordHit],
         vector_hits: Sequence[VectorHit],
         exact_ids: Sequence[int],
-    ) -> list[int]:
-        """z 门控 + 词命中加分的加权融合.
+    ) -> list[tuple[int, float]]:
+        """z 门控 + 词命中加分的加权融合, 回 ``[(metadata_id, 融合分)]``.
+
+        带分数返回是为了让调用方能给出相对相关度 (阈值与"多相关"的判断), 而不是只有名次:
+        名次在跨查询合并时会撞车, 分数不会.
 
         候选集 = 向量路召回 ∪ 关键词命中. 只在向量候选上算 z 分数, 关键词独有项没有语义分数,
         靠 ``word_weight`` 进入排名 —— 否则一个只在标题里出现过的番号会被语义路整个丢掉.
@@ -299,5 +381,6 @@ class SearchService:
             fused.append((word_weight - index * 1e-6, hit.metadata_id))
 
         fused.sort(key=lambda item: item[0], reverse=True)
-        ordered = [metadata_id for _, metadata_id in fused if metadata_id not in exact_set]
-        return [*exact, *ordered]
+        ordered = [(metadata_id, score) for score, metadata_id in fused if metadata_id not in exact_set]
+        ceiling = max((score for score, _ in fused), default=0.0) + 1.0
+        return [*((metadata_id, ceiling) for metadata_id in exact), *ordered]

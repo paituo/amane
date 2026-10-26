@@ -441,6 +441,14 @@ export type AgentConfig = {
      */
     base_url?: string;
     /**
+     * Use Proxy
+     */
+    use_proxy?: boolean;
+    /**
+     * Proxy
+     */
+    proxy?: string | null;
+    /**
      * Model
      */
     model?: string;
@@ -466,9 +474,21 @@ export type AgentConfig = {
      */
     tpm_limit?: number | null;
     /**
+     * Tpm Window S
+     */
+    tpm_window_s?: number;
+    /**
      * Rate Limit Cooldown S
      */
     rate_limit_cooldown_s?: number;
+    /**
+     * Rate Limit Backoff Factor
+     */
+    rate_limit_backoff_factor?: number;
+    /**
+     * Rate Limit Max Cooldown S
+     */
+    rate_limit_max_cooldown_s?: number;
     /**
      * Sql Timeout Ms
      */

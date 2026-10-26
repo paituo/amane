@@ -798,6 +798,14 @@
       "base_url": {
         "label": "API 端点"
       },
+      "use_proxy": {
+        "label": "使用代理",
+        "description": "通过配置的代理发送智能体请求; 关闭后直连, 不使用全局代理, 也不读系统环境变量里的代理"
+      },
+      "proxy": {
+        "label": "智能体代理",
+        "description": "智能体专用的代理地址, 留空使用全局代理; 关闭「使用代理」时直连"
+      },
       "model": {
         "label": "模型"
       },
@@ -815,7 +823,7 @@
       },
       "max_tokens": {
         "label": "最大输出 token",
-        "description": "单次回复的输出上限. 超过模型上限时上游拒绝请求"
+        "description": "单次回复的输出上限，最大 65536。部分模型在过大的值下不会报错，而是退化：不再发起工具调用，只把调用写进思考文本然后结束本轮，表现为「想了很久什么都没做」。16K 足够常规回复。"
       },
       "max_retries": {
         "label": "传输层重试次数",
@@ -833,9 +841,21 @@
         "label": "每分钟 token 上限",
         "description": "输入与输出合计的每分钟预算, 留空不按 token 限速. 上下文很重时单请求即可烧掉上万 token, 只限请求数防不住 429"
       },
+      "tpm_window_s": {
+        "label": "token 预算窗口 (秒)",
+        "description": "预算按多长的滑动窗口统计, 默认 60 秒与上游计量窗口一致. 设得比上游短会让本地估算偏松, 更容易撞 429"
+      },
       "rate_limit_cooldown_s": {
         "label": "限流冷却 (秒)",
         "description": "收到限流后这么多秒内不再发起任何请求 (含会话标题), 上游给出 Retry-After 时以它为准"
+      },
+      "rate_limit_backoff_factor": {
+        "label": "限流冷却倍增",
+        "description": "连续撞限流时冷却时间乘以该系数 (如 180→360→720), 任何一次请求成功后回到基础值; 1 表示不倍增"
+      },
+      "rate_limit_max_cooldown_s": {
+        "label": "限流冷却上限 (秒)",
+        "description": "倍增后的冷却最多等这么久, 避免日额度耗尽时回合无限期挂起; 0 表示不设上限"
       },
       "sql_timeout_ms": {
         "label": "查询默认超时 (毫秒)",
