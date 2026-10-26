@@ -89,6 +89,10 @@ const CONTEXT_MENU_MAX_HEIGHT = 96;
  * 自带处理在松开按键时执行且只执行一次: 左右键与「短按跳转、按住加速」冲突, 上下键无法按住连续调节音量.
  */
 const ARROW_HOTKEYS_OFF = "noarrowleft noarrowright noarrowup noarrowdown";
+/** 视频轨无输出检测的采样间隔. 这个失败没有事件可听, 只能按状态轮询. */
+const NO_SIGNAL_POLL_MS = 500;
+/** `HTMLMediaElement.HAVE_CURRENT_DATA`: 元素认为当前时刻的数据已经够渲染一帧. */
+const NO_SIGNAL_MIN_READY_STATE = 2;
 /**
  * 音量偏好的存储键.
  *
@@ -1764,6 +1768,32 @@ export function PlaybackPlayer({
       destroy?.();
     };
   }, [href, useNativeSrc, onFailedRef]);
+
+  // 视频轨没被解出来时浏览器不报错: 能解的音轨让播放时钟照走, 解不了的视频轨被静默丢掉, 画面全黑而
+  // `error` 始终为空. 判据是"自称有可渲染的数据, 却没有画面尺寸" —— `videoWidth` 取自已经解出画面的
+  // 视频轨, 有画面就一定非 0; 而 `readyState` 到 HAVE_CURRENT_DATA 说明元素不认为自己还在等数据.
+  // 仍在缓冲时两个条件不会同时成立, 因此慢速来源不会被误判.
+  useEffect(() => {
+    if (!useNativeSrc) {
+      return;
+    }
+    const video = videoRef.current;
+    if (video == null) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      if (!video.isConnected || video.videoWidth > 0) {
+        window.clearInterval(timer);
+        return;
+      }
+      if (video.readyState >= NO_SIGNAL_MIN_READY_STATE) {
+        window.clearInterval(timer);
+        onFailedRef.current({ kind: "nosignal" });
+      }
+    }, NO_SIGNAL_POLL_MS);
+    return () => window.clearInterval(timer);
+    // 换地址时播放器整体重新挂载 (调用方的 key 含地址), 因此这里不必把 href 列为依赖.
+  }, [useNativeSrc, onFailedRef]);
 
   return (
     <>
