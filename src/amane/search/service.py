@@ -281,11 +281,13 @@ class SearchService:
     ) -> list[int]:
         """精确番号命中集. 探针失败不影响检索, 只是少了这一层的排序优势.
 
-        字段范围不含 ``number`` 时整层跳过: 用户既然排除了番号列, 就不该再拿到"只因番号
-        命中"的结果.
+        与关键词字段范围解耦: 番号精确探针是独立的标识符解析, 用户收窄到 title/plot 等文本列
+        (``fields`` 不含 ``number``) 时, 关键词路不再把番号列纳入 OR 匹配, 但"按番号查"这一意图
+        仍应生效. 形如番号的查询 (``plan_keyword(...).number_exact`` 非空) 始终走探针, 不受
+        ``number`` 是否在 ``fields`` 中影响. 纯文本 / 中文查询没有 ASCII 词项, ``number_exact``
+        为空, 探针自身也会归零, 仍按原语义跳过. 这样搜 ``sisters`` 不会因番号列前缀巧合而误命中,
+        搜 ``CAWD-441`` 则能稳定命中番号.
         """
-        if fields is not None and SearchField.NUMBER not in fields:
-            return []
         try:
             return await self._store.exact_number_ids(text, limit=limit)
         except Exception as e:

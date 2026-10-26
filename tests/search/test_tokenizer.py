@@ -148,10 +148,16 @@ def test_plan_keyword_respects_field_scope(
     assert scope in plan.tiers[0]
 
 
-def test_plan_keyword_drops_number_channel_when_field_excluded() -> None:
-    """number 通道与精确探针都随该字段一起消失."""
+def test_plan_keyword_restricts_number_channel_but_keeps_exact_probe() -> None:
+    """排除 number 后, 关键词路由不再把番号列纳入 OR 匹配, 但精确探针表达式仍可用 (与字段范围解耦).
+
+    番号精确探针是独立标识符解析, 与关键词路的字段收窄无关: 用户按番号查时不应因 fields 不含
+    number 而整条失效. 关键词 tier 仍受字段约束, 排除 number 后 tier 里不再出现 {number} 列匹配.
+    """
     assert plan_keyword("SSIS-001").number_exact is not None
-    assert plan_keyword("SSIS-001", [SearchField.TITLE]).number_exact is None
+    # 精确探针表达式与字段范围无关: 按番号查的意图始终生效
+    assert plan_keyword("SSIS-001", [SearchField.TITLE]).number_exact is not None
+    # 关键词 tier 仍受字段范围约束: 排除 number 后 tier 不应出现 {number} 列匹配
     assert "{number}" not in plan_keyword("SSIS-001", [SearchField.TITLE]).tiers[0]
 
 

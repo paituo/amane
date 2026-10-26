@@ -248,11 +248,13 @@ def plan_keyword(query: str, fields: Sequence[SearchField] | None = None) -> Key
         phrase = _phrase(part)
         text_expr = f"{scope} : ({phrase})" if scope is not None and phrase is not None else ""
         if part.is_number_candidate:
+            # number_exact 始终基于归一原子, 与 number_ok / 字段范围无关: 番号精确探针是独立标识符
+            # 解析, 用户收窄到 title/plot 等文本列时不应让"按番号查"整条失效 (详见 engine._exact_ids).
+            atomics.append(_number_atomic(part))
             if not number_ok and not text_expr:
                 continue
             if number_ok:
                 has_number = True
-                atomics.append(_number_atomic(part))
             channels1 = [_number_atomic(part)] if number_ok else []
             if text_expr:
                 channels1.append(text_expr)

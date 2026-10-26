@@ -356,13 +356,21 @@ async def test_vector_path_ignores_fields(tmp_path: Path) -> None:
     await store.aclose()
 
 
-async def test_exact_number_layer_respects_fields(tmp_path: Path) -> None:
-    """排除 number 后精确层不再把真番号顶到最前."""
+async def test_exact_number_layer_fires_regardless_of_fields(tmp_path: Path) -> None:
+    """精确番号层与关键词字段范围解耦: 即使用户把 fields 收窄到 title (不含 number), 按番号查仍命中真番号.
+
+    旧实现里排除 number 会让精确层整层跳过, 导致 SSIS-001 这种番号查询在 fields=[title] 下
+    退化成向量近邻排序, 真番号顶不到最前 —— 这正是"按番号搜不到"的根因. 修复后精确层始终生效.
+    """
     store = await _store(tmp_path)
     provider = _FixedVectorProvider([0, 1, 0, 0, 0, 0, 0, 0])
     service = _service(store, provider, keyword_enabled=False, vector_enabled=True)
+    # 不限字段: 精确层把真番号顶到最前
     assert (await service.search("SSIS-001", limit=5)).ids[0] == 1
-    assert (await service.search("SSIS-001", limit=5, fields=[SearchField.TITLE])).ids[0] == 2
+    # 字段收窄到 title (不含 number): 精确层仍生效, 真番号 SSIS-001 仍是首条
+    assert (await service.search("SSIS-001", limit=5, fields=[SearchField.TITLE])).ids[0] == 1
+    # 纯文本查询 (非番号) 收窄到 title: 真·命中 (id2 含"人妻")排第一, 番号 SSIS-001 (id1) 不被精确层置顶
+    assert (await service.search("人妻", limit=5, fields=[SearchField.TITLE])).ids[0] == 2
     await store.aclose()
 
 
