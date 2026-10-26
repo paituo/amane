@@ -51,6 +51,7 @@ import { useUIStore } from "@/stores/ui";
 const ACTOR_SORT_I18N_KEY = exhaustiveRecord<ActorSortField>()({
   name: "manage.name",
   count: "manage.count",
+  gender: "browse.person.gender",
   updated_at: "columns.updated",
   has_image: "actors.hasImage",
   birthday: "browse.person.birthday",

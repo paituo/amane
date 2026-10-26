@@ -1,5 +1,6 @@
 import {
   Badge,
+  Box,
   Button,
   Checkbox,
   Group,
@@ -25,6 +26,7 @@ import {
 } from "@/client/@tanstack/react-query.gen";
 import type { SavedQueryEntity, SavedQueryResponse } from "@/client/types.gen";
 import { EnumToggle } from "@/components/common/enum-toggle";
+import { APP_SHELL_HEADER_HEIGHT } from "@/components/layout/app-shell-metrics";
 import { SavedQueryCard } from "@/components/saved-query/saved-query-card";
 import {
   emptySavedQueryForm,
@@ -181,58 +183,71 @@ function SavedQueriesPage() {
 
   return (
     <Stack gap="md" maw={PAGE_MAX_WIDTH} mx="auto" w="100%">
-      <Group justify="space-between" align="center" wrap="wrap">
-        <Title order={2}>{t("title")}</Title>
-        <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateOpen(true)}>
-          {t("newPreset")}
-        </Button>
-      </Group>
-
-      <TextInput
-        value={search}
-        onChange={(e) => setSearch(e.currentTarget.value)}
-        placeholder={t("searchPlaceholder")}
-        leftSection={<IconSearch size={16} />}
-      />
-
-      <Group gap="xs" wrap="wrap">
-        <EnumToggle
-          options={ENTITY_FILTERS}
-          value={entityFilter}
-          onChange={setEntityFilter}
-          getLabel={(entity) =>
-            entity === "all" ? t("filterAll") : t(SAVED_QUERY_ENTITY_LABEL_KEY[entity])
-          }
-        />
-      </Group>
-
-      <Group gap="sm" wrap="wrap" align="center">
-        <Checkbox
-          size="sm"
-          checked={allVisibleSelected}
-          indeterminate={!allVisibleSelected && selection.selectedIds.length > 0}
-          disabled={visibleIds.length === 0}
-          onChange={() => selection.toggleAll(visibleIds)}
-          label={t("selectAll")}
-        />
-        {selection.selectedIds.length > 0 && (
-          <>
-            <Button
-              size="compact-sm"
-              color="red"
-              variant="light"
-              leftSection={<IconTrash size={14} />}
-              loading={deleteMutation.isPending}
-              onClick={() => void handleBatchDelete()}
-            >
-              {t("batchDelete")}
+      {/* 搜索、实体筛选与多选条同属标头: 吸在顶栏下沿, 卡片列表从中滚过. */}
+      <Box
+        pb="md"
+        style={{
+          position: "sticky",
+          top: APP_SHELL_HEADER_HEIGHT,
+          zIndex: 2,
+          backgroundColor: "var(--mantine-color-body)",
+        }}
+      >
+        <Stack gap="md" style={{ minWidth: 0 }}>
+          <Group justify="space-between" align="center" wrap="wrap">
+            <Title order={2}>{t("title")}</Title>
+            <Button leftSection={<IconPlus size={16} />} onClick={() => setCreateOpen(true)}>
+              {t("newPreset")}
             </Button>
-            <Badge size="sm" variant="light" tt="none">
-              {t("common:batch.selected", { count: selection.selectedIds.length })}
-            </Badge>
-          </>
-        )}
-      </Group>
+          </Group>
+
+          <TextInput
+            value={search}
+            onChange={(e) => setSearch(e.currentTarget.value)}
+            placeholder={t("searchPlaceholder")}
+            leftSection={<IconSearch size={16} />}
+          />
+
+          <Group gap="xs" wrap="wrap">
+            <EnumToggle
+              options={ENTITY_FILTERS}
+              value={entityFilter}
+              onChange={setEntityFilter}
+              getLabel={(entity) =>
+                entity === "all" ? t("filterAll") : t(SAVED_QUERY_ENTITY_LABEL_KEY[entity])
+              }
+            />
+          </Group>
+
+          <Group gap="sm" wrap="wrap" align="center">
+            <Checkbox
+              size="sm"
+              checked={allVisibleSelected}
+              indeterminate={!allVisibleSelected && selection.selectedIds.length > 0}
+              disabled={visibleIds.length === 0}
+              onChange={() => selection.toggleAll(visibleIds)}
+              label={t("selectAll")}
+            />
+            {selection.selectedIds.length > 0 && (
+              <>
+                <Button
+                  size="compact-sm"
+                  color="red"
+                  variant="light"
+                  leftSection={<IconTrash size={14} />}
+                  loading={deleteMutation.isPending}
+                  onClick={() => void handleBatchDelete()}
+                >
+                  {t("batchDelete")}
+                </Button>
+                <Badge size="sm" variant="light" tt="none">
+                  {t("common:batch.selected", { count: selection.selectedIds.length })}
+                </Badge>
+              </>
+            )}
+          </Group>
+        </Stack>
+      </Box>
 
       {listQuery.isPending && (
         <Group justify="center" py="xl">

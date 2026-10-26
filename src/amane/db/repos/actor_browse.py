@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import String, and_, cast, func, literal, or_, text
+from sqlalchemy import String, and_, case, cast, func, literal, or_, text
 from sqlalchemy.sql.elements import ColumnElement
 from sqlalchemy.sql.functions import count
 from sqlmodel import col, select
@@ -41,6 +41,9 @@ def _actor_primary_order(sort_by: ActorSortField, order: SortOrder, *, count_exp
         primary = col(Actor.name)
     elif sort_by == ActorSortField.COUNT:
         primary = count_expr
+    elif sort_by == ActorSortField.GENDER:
+        # 未标注性别转成 NULL 交给 nulls_last: 升降序都把 unknown 排在末尾, 而不是按字母序把它顶到最前.
+        primary = case((col(Actor.gender) != ActorGender.UNKNOWN, col(Actor.gender)))
     elif sort_by == ActorSortField.UPDATED_AT:
         primary = col(Actor.updated_at)
     elif sort_by == ActorSortField.HAS_IMAGE:
@@ -62,6 +65,7 @@ def _actor_primary_order(sort_by: ActorSortField, order: SortOrder, *, count_exp
     ordered = primary.asc() if ascending else primary.desc()
     # 人物指标空值排到排序末尾, 避免无生日在 ASC 时排在最前.
     if sort_by in (
+        ActorSortField.GENDER,
         ActorSortField.BIRTHDAY,
         ActorSortField.HEIGHT,
         ActorSortField.BUST,

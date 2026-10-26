@@ -324,7 +324,7 @@ export type ActorScrapingConfig = {
 /**
  * ActorSortField
  */
-export type ActorSortField = 'name' | 'count' | 'updated_at' | 'has_image' | 'birthday' | 'height' | 'bust' | 'waist' | 'hip' | 'cup';
+export type ActorSortField = 'name' | 'count' | 'gender' | 'updated_at' | 'has_image' | 'birthday' | 'height' | 'bust' | 'waist' | 'hip' | 'cup';
 
 /**
  * ActorUpdateRequest

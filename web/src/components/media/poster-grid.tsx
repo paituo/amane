@@ -1,4 +1,4 @@
-import { AspectRatio, Button, Center, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
+import { AspectRatio, Box, Button, Center, SimpleGrid, Skeleton, Stack, Text } from "@mantine/core";
 import { notifications } from "@mantine/notifications";
 import {
   IconBan,
@@ -23,6 +23,7 @@ import { batchMetadataUserTags } from "@/client/sdk.gen";
 import type { MetadataResponse } from "@/client/types.gen";
 import { SelectionBar } from "@/components/common/selection-bar";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
+import { STICKY_UNDER_BROWSE_HEADER_TOP } from "@/components/layout/app-shell-metrics";
 import { MetadataViewer } from "@/components/media/metadata-viewer";
 import { PlaybackModal } from "@/components/media/playback-modal";
 import { PlaybackQueueModal } from "@/components/media/playback-queue-modal";
@@ -251,85 +252,97 @@ export function PosterGrid({
 
   return (
     <>
-      <SelectionBar count={selected.size}>
-        <HintedActionIcon
-          label={t("playlist.selectAll")}
-          variant="default"
-          size="sm"
-          onClick={() => selectAll(items.map((item) => item.id))}
-        >
-          <IconSelectAll size={16} />
-        </HintedActionIcon>
-        <HintedActionIcon
-          label={t("playlist.invert")}
-          variant="default"
-          size="sm"
-          onClick={() => invert(items.map((item) => item.id))}
-        >
-          <IconSquareOff size={16} />
-        </HintedActionIcon>
-        <Button
-          size="xs"
-          variant="light"
-          leftSection={<IconPlayerPlay size={14} />}
-          loading={openPlaylist.isPending}
-          disabled={selected.size === 0}
-          onClick={handlePlaySelected}
-        >
-          {t("actions.playSelected")}
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          leftSection={<IconPlaylistAdd size={14} />}
-          disabled={selected.size === 0}
-          onClick={handleAddToPlaylist}
-        >
-          {t("actions.addToPlaylist")}
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          leftSection={<IconRefresh size={14} />}
-          loading={busy}
-          disabled={selected.size === 0}
-          onClick={() => batchScrape.mutate({ body: { ids: selectedIds } })}
-        >
-          {t("actions.batchScrape")}
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          leftSection={<IconStar size={14} />}
-          loading={busy}
-          disabled={selected.size === 0}
-          onClick={() => void batchFavorite()}
-        >
-          {t("favorite.add")}
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          color="dark"
-          leftSection={<IconBan size={14} />}
-          loading={busy}
-          disabled={selected.size === 0}
-          onClick={() => void batchBlacklist()}
-        >
-          {t("blacklist.add")}
-        </Button>
-        <Button
-          size="xs"
-          variant="light"
-          color="red"
-          leftSection={<IconTrash size={14} />}
-          loading={busy}
-          disabled={selected.size === 0}
-          onClick={() => void handleBatchDelete()}
-        >
-          {t("actions.batchDelete")}
-        </Button>
-      </SelectionBar>
+      {/* 批量工具条吸附在浏览页壳标头正下方 (见 STICKY_UNDER_BROWSE_HEADER_TOP): 网格靠 window 滚动,
+          工具条若随大流滚走, 翻到深处就没有可用动作了. 背景色必须有, 否则海报会从它下面透出来.
+          层级须高于卡片信息层的 z-index:2, 低于标头的 4, 否则海报会盖住这一条. */}
+      <Box
+        style={{
+          position: "sticky",
+          top: STICKY_UNDER_BROWSE_HEADER_TOP,
+          zIndex: 3,
+          backgroundColor: "var(--mantine-color-body)",
+        }}
+      >
+        <SelectionBar count={selected.size}>
+          <HintedActionIcon
+            label={t("playlist.selectAll")}
+            variant="default"
+            size="sm"
+            onClick={() => selectAll(items.map((item) => item.id))}
+          >
+            <IconSelectAll size={16} />
+          </HintedActionIcon>
+          <HintedActionIcon
+            label={t("playlist.invert")}
+            variant="default"
+            size="sm"
+            onClick={() => invert(items.map((item) => item.id))}
+          >
+            <IconSquareOff size={16} />
+          </HintedActionIcon>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPlayerPlay size={14} />}
+            loading={openPlaylist.isPending}
+            disabled={selected.size === 0}
+            onClick={handlePlaySelected}
+          >
+            {t("actions.playSelected")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconPlaylistAdd size={14} />}
+            disabled={selected.size === 0}
+            onClick={handleAddToPlaylist}
+          >
+            {t("actions.addToPlaylist")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconRefresh size={14} />}
+            loading={busy}
+            disabled={selected.size === 0}
+            onClick={() => batchScrape.mutate({ body: { ids: selectedIds } })}
+          >
+            {t("actions.batchScrape")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            leftSection={<IconStar size={14} />}
+            loading={busy}
+            disabled={selected.size === 0}
+            onClick={() => void batchFavorite()}
+          >
+            {t("favorite.add")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            color="dark"
+            leftSection={<IconBan size={14} />}
+            loading={busy}
+            disabled={selected.size === 0}
+            onClick={() => void batchBlacklist()}
+          >
+            {t("blacklist.add")}
+          </Button>
+          <Button
+            size="xs"
+            variant="light"
+            color="red"
+            leftSection={<IconTrash size={14} />}
+            loading={busy}
+            disabled={selected.size === 0}
+            onClick={() => void handleBatchDelete()}
+          >
+            {t("actions.batchDelete")}
+          </Button>
+        </SelectionBar>
+      </Box>
       <SimpleGrid cols={cols} spacing="md">
         {items.map((item) => (
           <PosterCard

@@ -148,3 +148,21 @@ async def test_browse_actors_has_person_and_sort(repo: Repository) -> None:
     )
     bdays = [i.birthday for i in by_bday if i.birthday]
     assert bdays == sorted(bdays)
+
+
+@pytest.mark.parametrize(
+    ("order", "expected"),
+    [
+        (SortOrder.ASC, [ActorGender.FEMALE, ActorGender.MALE, ActorGender.UNKNOWN]),
+        (SortOrder.DESC, [ActorGender.MALE, ActorGender.FEMALE, ActorGender.UNKNOWN]),
+    ],
+    ids=["asc", "desc"],
+)
+@pytest.mark.asyncio(loop_scope="function")
+async def test_browse_actors_sort_by_gender(repo: Repository, order: SortOrder, expected: list[ActorGender]) -> None:
+    """性别排序: 升降序只翻转已知性别, 未标注的恒在末尾 (按字母序时 DESC 会把它顶到最前)."""
+    await _seed_filter_actors(repo)
+    items, _ = await repo.browse_actors(ActorBrowseParams(sort_by=ActorSortField.GENDER, order=order, limit=200))
+    got = [i.gender for i in items]
+    # 同性别内部次序由副排序决定, 这里只断言分组顺序: 折叠相邻重复后的序列即期望顺序.
+    assert [g for i, g in enumerate(got) if i == 0 or got[i - 1] != g] == expected

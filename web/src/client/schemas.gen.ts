@@ -509,6 +509,7 @@ export const ActorSortFieldSchema = {
     enum: [
         'name',
         'count',
+        'gender',
         'updated_at',
         'has_image',
         'birthday',

@@ -173,6 +173,7 @@ export const FAVORITE_FACET_KINDS = exhaustiveTuple<Exclude<FacetKind, "actor" |
 export const ACTOR_SORT_FIELDS = exhaustiveTuple<ActorSortField>()(
   "name",
   "count",
+  "gender",
   "updated_at",
   "has_image",
   "birthday",

@@ -47,7 +47,7 @@ import type {
 } from "@/client/types.gen";
 import { HintedActionIcon } from "@/components/common/hinted-action-icon";
 import { ListToolbar } from "@/components/common/list-toolbar";
-import { ResizableTh, SortableTh } from "@/components/common/sortable-th";
+import { SortableTh } from "@/components/common/sortable-th";
 import { SelectionBar } from "@/components/common/selection-bar";
 import { FacetRulesPanel } from "./facet-rules-panel";
 import { useFacetIdentityActions } from "@/hooks/use-facet-identity-actions";
@@ -67,6 +67,7 @@ import classes from "./actor-table.module.css";
 /** 表头可排序列 = ActorSortField 全集 (与 SortMenu 对齐). */
 const SORTABLE_COLUMNS = [
   "name",
+  "gender",
   "count",
   "birthday",
   "height",
@@ -125,6 +126,7 @@ const GENDER_I18N_KEY = exhaustiveRecord<ActorGender>()({
 
 const SORT_COLUMN_I18N_KEY = exhaustiveRecord<SortableColumn>()({
   name: "manage.name",
+  gender: "browse.person.gender",
   count: "manage.count",
   birthday: "browse.person.birthday",
   height: "browse.person.height",
@@ -153,6 +155,8 @@ function cellValue(actor: ActorResponse, field: SortableColumn): string {
       return actor.name;
     case "count":
       return String(actor.count);
+    case "gender":
+      return actor.gender ?? "unknown";
     case "birthday":
       return actor.birthday?.trim() ?? "";
     case "height":
@@ -515,9 +519,6 @@ export function ActorTable({
                 w={columnWidth("name")}
                 resizeHandle={getResizeHandleProps("name")}
               />
-              <ResizableTh w={columnWidth("gender")} resizeHandle={getResizeHandleProps("gender")}>
-                {t("browse.person.gender")}
-              </ResizableTh>
               {SORTABLE_COLUMNS.filter((f) => f !== "name").map((field) => (
                 <SortableTh
                   key={field}

@@ -115,6 +115,7 @@ class FacetSortField(StrEnum):
 class ActorSortField(StrEnum):
     NAME = "name"
     COUNT = "count"
+    GENDER = "gender"
     UPDATED_AT = "updated_at"
     HAS_IMAGE = "has_image"
     BIRTHDAY = "birthday"

@@ -11,7 +11,7 @@ import { MetadataDetail } from "./metadata-detail";
 /** 距末尾还剩这么多张时追加下一页: 用户翻到当前最后一张之前, 后续条目已经接上. */
 const PREFETCH_REMAINING = 2;
 
-/** 弹窗可用高度. 左右箭头固定在内容之外, 因此内容区自身滚动. */
+/** 弹窗内容区的最大高度. 左右箭头固定在内容之外, 因此内容区自身滚动; 内容不足时按内容收缩. */
 const VIEWER_HEIGHT = "calc(var(--amane-vh) * 0.86)";
 
 interface MetadataViewerProps {
@@ -129,16 +129,17 @@ export function MetadataViewer({
       centered
       size={narrowViewport ? "100%" : "74rem"}
       padding="md"
-      title={current ? `${index + 1} / ${items.length}` : ""}
+      withCloseButton={false}
+      // 翻阅位置与关闭按钮都收进详情标题行, 弹窗自身不再留标题栏.
+      styles={{ header: { display: "none" }, body: { paddingBlock: "var(--mantine-spacing-xs)" } }}
     >
       {current && (
-        <Box pos="relative" style={{ height: VIEWER_HEIGHT }} onClick={handleContentClick}>
+        <Box pos="relative" style={{ maxHeight: VIEWER_HEIGHT }} onClick={handleContentClick}>
           {/* 宽屏为箭头留出两侧的空间: 内容再长也不会滚到箭头之下. */}
           <Box
             ref={scrollRef}
-            h="100%"
             px={narrowViewport ? 0 : "xl"}
-            style={{ overflowY: "auto" }}
+            style={{ maxHeight: VIEWER_HEIGHT, overflowY: "auto" }}
           >
             {narrowViewport && (
               <Group justify="space-between" pb="xs">
@@ -150,6 +151,8 @@ export function MetadataViewer({
               key={current.id}
               metadataId={String(current.id)}
               embedded
+              counter={`${index + 1} / ${items.length}`}
+              onClose={() => onOpenIdChange(null)}
               onDeleted={() => onOpenIdChange(null)}
             />
           </Box>

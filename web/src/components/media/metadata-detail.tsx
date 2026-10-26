@@ -33,6 +33,7 @@ import {
   IconRefresh,
   IconStar,
   IconTrash,
+  IconX,
 } from "@tabler/icons-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -134,6 +135,10 @@ export interface MetadataDetailProps {
   onDeleted?: () => void;
   /** 弹窗场景: 滚动由宿主的容器负责, 不再补整页下沿留白. */
   embedded?: boolean;
+  /** 弹窗场景: 翻阅位置 (如「19 / 60」). 由标题行承载, 宿主不再另开一行放置. */
+  counter?: string;
+  /** 弹窗场景: 标题行末尾的关闭按钮; 页面场景不传, 省掉这一行也省掉弹窗自带标题栏. */
+  onClose?: () => void;
 }
 
 /** 影片详情主体: 详情路由与就地弹窗共用同一份渲染. */
@@ -143,6 +148,8 @@ export function MetadataDetail({
   onSeekCommit,
   onDeleted,
   embedded = false,
+  counter,
+  onClose,
 }: MetadataDetailProps) {
   const { t } = useTranslation(["metadata", "library", "common"]);
   const queryClient = useQueryClient();
@@ -540,9 +547,16 @@ export function MetadataDetail({
     // 下沿留出的空白比其余三边大得多: 滚到底时末尾的卡片不贴视口底边, 还能再滚一截.
     // 弹窗自带滚动容器, 这份留白会变成多余的空白, 交给 `embedded` 关掉.
     <Stack gap="md" pb={embedded ? undefined : "calc(var(--amane-vh) * 0.1)"}>
-      <Group justify="space-between" align="center" wrap="wrap" gap="xs" mb="xs">
-        <Group gap={6} align="center" wrap="nowrap" style={{ minWidth: 0 }}>
-          <Title order={5} ff="monospace">
+      <Group justify="space-between" align="center" wrap="wrap" gap="xs">
+        {/* flex-basis 取 0 而不是内容宽度: 标题再长也只吃剩余空间, 不会把右侧动作按钮挤到下一行. */}
+        <Group gap={6} align="center" wrap="nowrap" style={{ flex: "1 1 0%", minWidth: 0 }}>
+          {counter != null && (
+            <Text size="xs" c="dimmed" ff="monospace" style={{ flexShrink: 0 }}>
+              {counter}
+            </Text>
+          )}
+          {/* 编号是与标签同排的定宽块: 窄视口下允许它把标题挤成省略号, 但不许在连字符处折行. */}
+          <Title order={5} ff="monospace" style={{ flexShrink: 0, whiteSpace: "nowrap" }}>
             {item.number}
           </Title>
           {item.title && (
@@ -688,6 +702,16 @@ export function MetadataDetail({
               </Menu.Item>
             </Menu.Dropdown>
           </Menu>
+          {onClose && (
+            <ActionIcon
+              variant="subtle"
+              size="md"
+              aria-label={t("common:actions.close")}
+              onClick={onClose}
+            >
+              <IconX size={18} />
+            </ActionIcon>
+          )}
         </Group>
       </Group>
 

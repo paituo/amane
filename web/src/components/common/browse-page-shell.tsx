@@ -1,9 +1,13 @@
 import { ActionIcon, Box, Drawer, Group, Stack } from "@mantine/core";
 import { useDisclosure } from "@mantine/hooks";
 import { IconAdjustmentsHorizontal } from "@tabler/icons-react";
-import type { ReactNode } from "react";
+import { type CSSProperties, type ReactNode, useLayoutEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { APP_SHELL_MAIN_HEIGHT } from "@/components/layout/app-shell-metrics";
+import {
+  APP_SHELL_HEADER_HEIGHT,
+  APP_SHELL_MAIN_HEIGHT,
+  BROWSE_HEADER_HEIGHT_VAR,
+} from "@/components/layout/app-shell-metrics";
 import { useNarrowViewport } from "@/hooks/use-narrow-viewport";
 
 export interface BrowsePageShellProps {
@@ -66,23 +70,56 @@ export function BrowsePageShell({
   const narrowViewport = useNarrowViewport("md");
   const [filtersOpened, { open: openFilters, close: closeFilters }] = useDisclosure(false);
 
+  // 吸附标头的实测高度: 下方的次级吸附条 (网格视图的批量工具条) 靠它叠在标头正下方.
+  // 不能写死像素 - 高级筛选面板展开、窄屏折行都会改变标头高度.
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [headerHeight, setHeaderHeight] = useState(0);
+
+  // 用 layout effect: 首帧前就量好, 否则宽屏布局闪一下再切窄屏时, 次级吸附条会先按旧高度定位.
+  useLayoutEffect(() => {
+    if (fill) return;
+    const el = headerRef.current;
+    if (el == null) return;
+    const sync = () => setHeaderHeight(el.offsetHeight);
+    sync();
+    const observer = new ResizeObserver(sync);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [fill]);
+
   return (
     <Stack
       gap="md"
       style={{
         minWidth: 0,
-        // fill: 高度钉在 Main 内容区; 纵向仍可滚动, 避免 chrome 过高时把分页裁掉.
+        // fill: 高度钉在 Main 内容区. 滚动交给内容区自己, 标头因此不随列表滚走.
         ...(fill
-          ? { height: APP_SHELL_MAIN_HEIGHT, overflowY: "auto", overflowX: "hidden" }
-          : undefined),
+          ? { height: APP_SHELL_MAIN_HEIGHT, overflow: "hidden" }
+          : ({
+              // 供后代 (如网格视图的批量工具条) 计算各自吸附位置; 见 BROWSE_HEADER_HEIGHT_VAR.
+              [BROWSE_HEADER_HEIGHT_VAR]: `${headerHeight}px`,
+            } as CSSProperties)),
       }}
     >
       <Box
+        ref={headerRef}
         pb="md"
         style={{
           borderBottom: "1px solid var(--mantine-color-default-border)",
           minWidth: 0,
           flexShrink: 0,
+          // 非 fill (海报 / 词云, 靠 window 滚动) 时标头吸附在 AppShell 顶栏下沿;
+          // 必须有背景色, 否则列表会从它下面透出来.
+          ...(fill
+            ? undefined
+            : {
+                position: "sticky",
+                top: APP_SHELL_HEADER_HEIGHT,
+                // 层级: 标头 (4) > 次级吸附条 (3, 见 poster-grid) > 卡片悬浮层 (2). 三者必须拉开,
+                // 否则海报卡片上 z-index:2 的信息层会盖住吸附条.
+                zIndex: 4,
+                backgroundColor: "var(--mantine-color-body)",
+              }),
         }}
       >
         <Stack gap="md" style={{ minWidth: 0 }}>
@@ -161,6 +198,9 @@ export function BrowsePageShell({
               </Box>
             </Stack>
           )}
+
+          {/* 高级筛选与搜索同属标头: 随标头一起固定, 不跟着列表滚走. */}
+          {narrowViewport ? null : filterPanel}
         </Stack>
       </Box>
 
@@ -185,8 +225,13 @@ export function BrowsePageShell({
         </Stack>
       </Drawer>
 
-      <Stack gap="md" style={{ minWidth: 0, ...(fill ? { flex: 1, minHeight: 0 } : undefined) }}>
-        {narrowViewport ? null : filterPanel}
+      <Stack
+        gap="md"
+        style={{
+          minWidth: 0,
+          ...(fill ? { flex: 1, minHeight: 0, overflowY: "auto", overflowX: "hidden" } : undefined),
+        }}
+      >
         {children}
       </Stack>
     </Stack>

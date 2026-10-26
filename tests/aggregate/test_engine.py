@@ -859,7 +859,8 @@ class TestComplexScenarios:
 
         assert state.result.title == "FromJavDB"
         assert state.result.field_sources["title"] == "javdb"
-        assert [a.name for a in state.result.actors] == ["P1"]
+        # 演员与标量字段不同: 跨字段链取并集 (见 _resolve_actors_union), 高优先级源不再整份覆盖后续源.
+        assert [a.name for a in state.result.actors] == ["P1", "J1"]
         assert state.result.field_sources["actors"] == PLUGIN_K
         assert state.result.poster_urls == ["http://plugin/poster.jpg"]
         assert state.result.thumb_urls == ["http://jdbstatic/cover.jpg", "http://plugin/thumb.jpg"]
