@@ -66,7 +66,7 @@ def test_double_encoded_entities_decode_per_pass() -> None:
 
 # --- clean_title: 爬取后处理 / 存量回填共用的标题去重 ---
 
-_TITLE_CASES: list[tuple[str, str, tuple[str, ...], str]] = [
+_TITLE_CASES: list[tuple[str, str | None, tuple[str, ...], str]] = [
     # (原标题, 番号, 演员名单, 期望)
     ("YST-232 与最爱的母亲结婚的继父是个鬼畜。 泉莉音", "YST-232", (), "与最爱的母亲结婚的继父是个鬼畜。 泉莉音"),
     (
