@@ -715,6 +715,9 @@ export function MetadataDetail({
         </Group>
       </Group>
 
+      {/* 分栏方向只由 DOM 顺序表达: 封面列排在前, 就在左; 信息列在后, 就在右.
+          别改回 `flexDirection: row-reverse` —— 内联样式确实生效 (实测封面会翻到右侧), 但读代码的人
+          看到 reverse 会先入为主以为"封面在右", 与 DOM 顺序打架; 换行 (wrap) 时行序判断也更绕. */}
       <Group align="flex-start" wrap="wrap" gap="lg">
         <Stack gap="xs" style={{ flex: "3 1 360px", minWidth: 280 }}>
           {showEmbedded ? (
