@@ -192,16 +192,19 @@ class MetadataRepoMixin(RepositoryMixinBase):
         has_files: bool | None = None,
         has_subtitle: bool | None = None,
         vr: bool | None = None,
-        mosaic: Mosaic | None = None,
+        mosaic: Sequence[Mosaic] | None = None,
         uncensored: bool | None = None,
-        definition: str | None = None,
-        content_type: ContentType | None = None,
+        definition: Sequence[str] | None = None,
+        content_type: Sequence[ContentType] | None = None,
         ids: Sequence[int] | None = None,
         id_subquery_sql: str | None = None,
         updated_before: datetime | None = None,
     ) -> tuple[list[Metadata], int]:
-        """关联类 facet 同 kind 多 id 为 AND; 标量类同 kind 多 id 为 OR (未知 id 忽略, 全部未知则空).
-        跨 kind 始终 AND. 相位筛选项: 布尔 True=至少一份具备, False=没有任何一份具备.
+        """同 kind 多 id 一律 OR (跨 kind 始终 AND): 筛选项是"任一命中即可", 不是"全部具备".
+
+        关联类 facet 走一次 ``in_`` 子查询而不是逐 id 串联 —— 逐 id 串起来就是交集, 勾两个演员
+        会退化成"两人合作的影片", 与筛选器的直觉相反. 空序列 (或 None) 视为不限, 不是空集.
+        相位筛选项: 布尔 True=至少一份具备, False=没有任何一份具备; 多值为 OR.
         """
         async with self._session() as session:
             base = select(Metadata)
@@ -217,24 +220,36 @@ class MetadataRepoMixin(RepositoryMixinBase):
                 base = base.where(
                     or_(col(Metadata.number).ilike(search_pattern), col(Metadata.title).ilike(search_pattern))
                 )
-            for actor_id in unique_ids(actor_ids):
-                base = base.where(
-                    col(Metadata.id).in_(select(MetadataActor.metadata_id).where(MetadataActor.actor_id == actor_id))
-                )
-            for director_id in unique_ids(director_ids):
+            actor_id_list = unique_ids(actor_ids)
+            if actor_id_list:
                 base = base.where(
                     col(Metadata.id).in_(
-                        select(MetadataDirector.metadata_id).where(MetadataDirector.director_id == director_id)
+                        select(MetadataActor.metadata_id).where(col(MetadataActor.actor_id).in_(actor_id_list))
                     )
                 )
-            for tag_id in unique_ids(tag_ids):
-                base = base.where(
-                    col(Metadata.id).in_(select(MetadataTag.metadata_id).where(MetadataTag.tag_id == tag_id))
-                )
-            for user_tag_id in unique_ids(user_tag_ids):
+            director_id_list = unique_ids(director_ids)
+            if director_id_list:
                 base = base.where(
                     col(Metadata.id).in_(
-                        select(MetadataUserTag.metadata_id).where(MetadataUserTag.user_tag_id == user_tag_id)
+                        select(MetadataDirector.metadata_id).where(
+                            col(MetadataDirector.director_id).in_(director_id_list)
+                        )
+                    )
+                )
+            tag_id_list = unique_ids(tag_ids)
+            if tag_id_list:
+                base = base.where(
+                    col(Metadata.id).in_(
+                        select(MetadataTag.metadata_id).where(col(MetadataTag.tag_id).in_(tag_id_list))
+                    )
+                )
+            user_tag_id_list = unique_ids(user_tag_ids)
+            if user_tag_id_list:
+                base = base.where(
+                    col(Metadata.id).in_(
+                        select(MetadataUserTag.metadata_id).where(
+                            col(MetadataUserTag.user_tag_id).in_(user_tag_id_list)
+                        )
                     )
                 )
             studio_names = await resolve_scalar_facet_names(session, Studio, studio_ids)
@@ -267,15 +282,18 @@ class MetadataRepoMixin(RepositoryMixinBase):
                 base = base.where(_metadata_linked_file_exists(has_subtitle_predicate()))
             elif has_subtitle is False:
                 base = base.where(~_metadata_linked_file_exists(has_subtitle_predicate()))
-            if mosaic is not None:
-                base = base.where(_metadata_linked_file_exists(col(MediaFile.mosaic) == mosaic))
+            mosaic_list = list(dict.fromkeys(mosaic or ()))
+            if mosaic_list:
+                base = base.where(_metadata_linked_file_exists(col(MediaFile.mosaic).in_(mosaic_list)))
             if uncensored is not None:
                 flag = _metadata_uncensored_predicate()
                 base = base.where(flag if uncensored else ~flag)
-            if definition is not None:
-                base = base.where(_metadata_linked_file_exists(col(MediaFile.definition) == definition))
-            if content_type is not None:
-                base = base.where(col(Metadata.content_type) == content_type)
+            definition_list = list(dict.fromkeys(definition or ()))
+            if definition_list:
+                base = base.where(_metadata_linked_file_exists(col(MediaFile.definition).in_(definition_list)))
+            content_type_list = list(dict.fromkeys(content_type or ()))
+            if content_type_list:
+                base = base.where(col(Metadata.content_type).in_(content_type_list))
             if updated_before is not None:
                 base = base.where(col(Metadata.updated_at) < updated_before)
 

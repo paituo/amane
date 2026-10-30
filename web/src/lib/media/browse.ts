@@ -50,6 +50,32 @@ const searchFieldListSchema = z.preprocess(
   z.array(z.enum(SEARCH_FIELDS)).optional(),
 );
 
+/**
+ * 字符串枚举多值: 单值 (旧链接 / 保存的预设) 与数组都能收, 非法值与重复项丢弃.
+ * 空结果返回 undefined —— 不限不写进 URL, 地址才不会随默认值膨胀.
+ */
+function coerceEnumList<T extends string>(value: unknown, allowed: readonly T[]): T[] | undefined {
+  if (value == null || value === "") return undefined;
+  const permitted = new Set<string>(allowed);
+  const raw = Array.isArray(value) ? value : [value];
+  const picked: T[] = [];
+  const seen = new Set<string>();
+  for (const item of raw) {
+    if (typeof item !== "string" || seen.has(item) || !permitted.has(item)) continue;
+    seen.add(item);
+    picked.push(item as T); // Set<string> 已在上一行校验过取值域, 收窄到枚举成员是安全的.
+  }
+  return picked.length > 0 ? picked : undefined;
+}
+
+/** 同一类多值在服务端是 OR (任一命中即可), 见 docs/dev/api.md. */
+function enumListSchema<T extends string>(allowed: readonly T[]) {
+  return z.preprocess(
+    (value) => coerceEnumList(value, allowed),
+    z.array(z.enum(allowed)).optional(),
+  );
+}
+
 /** 片库与演员详情出演作品共用的排序项; 数组顺序即菜单显示顺序. */
 export const METADATA_SORT_OPTIONS = [
   { value: "updated_at", labelKey: "columns.updated" },
@@ -101,9 +127,9 @@ export const metaSearchSchema = z.object({
   has_subtitle: z.enum(["true", "false"]).optional(),
   vr: z.enum(["true", "false"]).optional(),
   uncensored: z.enum(["true", "false"]).optional(),
-  mosaic: z.enum(MOSAICS).optional(),
-  definition: z.enum(FILE_DEFINITIONS).optional(),
-  content_type: z.enum(CONTENT_TYPES).optional(),
+  mosaic: enumListSchema(MOSAICS),
+  definition: enumListSchema(FILE_DEFINITIONS),
+  content_type: enumListSchema(CONTENT_TYPES),
   saved_query_id: z.coerce.number().int().positive().optional(),
 });
 

@@ -32,8 +32,9 @@ class TestFacetsApi:
         bob_id = next(i["id"] for i in resp.json()["items"] if i["name"] == "Bob")
         resp = await client.get(f"metadata?actor_id={actor_id}&actor_id={bob_id}")
         assert resp.status_code == 200
-        assert resp.json()["total"] == 1
-        assert resp.json()["items"][0]["number"] == "F-002"
+        # 同 kind 多值为 OR: Alice 或 Bob 出演, 取并集 (F-002 两人都在, 去重后仍两条).
+        assert resp.json()["total"] == 2
+        assert {i["number"] for i in resp.json()["items"]} == {"F-001", "F-002"}
 
         resp = await client.get(f"facets/actor/{actor_id}")
         assert resp.status_code == 200

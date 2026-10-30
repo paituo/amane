@@ -25,9 +25,10 @@ export type HasFilesFilter = boolean | null;
 export type FilePhaseFilters = {
   has_subtitle: HasFilesFilter;
   uncensored: HasFilesFilter;
-  mosaic: Mosaic | null;
-  definition: (typeof FILE_DEFINITIONS)[number] | null;
-  content_type: ContentType | null;
+  /** 多选: 同一类多值是 OR (任一命中即可); 空数组 = 不限. */
+  mosaic: Mosaic[];
+  definition: (typeof FILE_DEFINITIONS)[number][];
+  content_type: ContentType[];
 };
 
 interface FacetFilterControlsProps {
@@ -187,27 +188,6 @@ function parseTriSelect(value: string | null): HasFilesFilter {
   return null;
 }
 
-function parseMosaic(value: string | null): Mosaic | null {
-  for (const mosaic of MOSAICS) {
-    if (mosaic === value) return mosaic;
-  }
-  return null;
-}
-
-function parseContentType(value: string | null): ContentType | null {
-  for (const contentType of CONTENT_TYPES) {
-    if (contentType === value) return contentType;
-  }
-  return null;
-}
-
-function parseDefinition(value: string | null): (typeof FILE_DEFINITIONS)[number] | null {
-  for (const definition of FILE_DEFINITIONS) {
-    if (definition === value) return definition;
-  }
-  return null;
-}
-
 export function FacetFilterControls({
   opened,
   filters,
@@ -283,7 +263,9 @@ export function FacetFilterControls({
             clearable
             size="sm"
           />
-          <Select
+          {/* 三者都是同一类多值: 多选, 服务端按 OR 求并集. 布尔类 (有文件 / VR / 中字 / 无码)
+              保持单选 —— 是/否两个都勾等于不限, 多选在那里没有语义. */}
+          <MultiSelect
             label={t("search.mosaic")}
             placeholder={t("search.any")}
             data={MOSAICS.map((mosaic) => ({
@@ -291,16 +273,13 @@ export function FacetFilterControls({
               label: t(`search.mosaics.${mosaic}`),
             }))}
             value={filePhase.mosaic}
-            onChange={(v) =>
-              onFilePhaseChange({
-                ...filePhase,
-                mosaic: parseMosaic(v),
-              })
+            onChange={(values) =>
+              onFilePhaseChange({ ...filePhase, mosaic: MOSAICS.filter((v) => values.includes(v)) })
             }
             clearable
             size="sm"
           />
-          <Select
+          <MultiSelect
             label={t("search.definition")}
             placeholder={t("search.any")}
             data={FILE_DEFINITIONS.map((definition) => ({
@@ -308,11 +287,16 @@ export function FacetFilterControls({
               label: definition,
             }))}
             value={filePhase.definition}
-            onChange={(v) => onFilePhaseChange({ ...filePhase, definition: parseDefinition(v) })}
+            onChange={(values) =>
+              onFilePhaseChange({
+                ...filePhase,
+                definition: FILE_DEFINITIONS.filter((v) => values.includes(v)),
+              })
+            }
             clearable
             size="sm"
           />
-          <Select
+          <MultiSelect
             label={t("search.contentType")}
             placeholder={t("search.any")}
             data={CONTENT_TYPES.map((contentType) => ({
@@ -320,10 +304,10 @@ export function FacetFilterControls({
               label: t(`search.contentTypes.${contentType}`),
             }))}
             value={filePhase.content_type}
-            onChange={(v) =>
+            onChange={(values) =>
               onFilePhaseChange({
                 ...filePhase,
-                content_type: parseContentType(v),
+                content_type: CONTENT_TYPES.filter((v) => values.includes(v)),
               })
             }
             clearable

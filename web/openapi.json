@@ -1014,10 +1014,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by actor facet id(s); AND",
+              "description": "Filter by actor facet id(s); OR",
               "title": "Actor Id"
             },
-            "description": "Filter by actor facet id(s); AND"
+            "description": "Filter by actor facet id(s); OR"
           },
           {
             "name": "director_id",
@@ -1035,10 +1035,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by director facet id(s); AND",
+              "description": "Filter by director facet id(s); OR",
               "title": "Director Id"
             },
-            "description": "Filter by director facet id(s); AND"
+            "description": "Filter by director facet id(s); OR"
           },
           {
             "name": "tag_id",
@@ -1056,10 +1056,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by scraped tag facet id(s); AND",
+              "description": "Filter by scraped tag facet id(s); OR",
               "title": "Tag Id"
             },
-            "description": "Filter by scraped tag facet id(s); AND"
+            "description": "Filter by scraped tag facet id(s); OR"
           },
           {
             "name": "studio_id",
@@ -1140,10 +1140,10 @@
                   "type": "null"
                 }
               ],
-              "description": "Filter by user tag id(s); AND",
+              "description": "Filter by user tag id(s); OR",
               "title": "User Tag Id"
             },
-            "description": "Filter by user tag id(s); AND"
+            "description": "Filter by user tag id(s); OR"
           },
           {
             "name": "library_id",
@@ -1227,16 +1227,19 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/Mosaic"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/Mosaic"
+                  }
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by linked file mosaic marker",
+              "description": "Filter by linked file mosaic marker(s); OR",
               "title": "Mosaic"
             },
-            "description": "Filter by linked file mosaic marker"
+            "description": "Filter by linked file mosaic marker(s); OR"
           },
           {
             "name": "uncensored",
@@ -1263,16 +1266,19 @@
             "schema": {
               "anyOf": [
                 {
-                  "type": "string"
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by linked file definition (8K/4K/1080p/…)",
+              "description": "Filter by linked file definition(s) (8K/4K/1080p/…); OR",
               "title": "Definition"
             },
-            "description": "Filter by linked file definition (8K/4K/1080p/…)"
+            "description": "Filter by linked file definition(s) (8K/4K/1080p/…); OR"
           },
           {
             "name": "content_type",
@@ -1281,16 +1287,19 @@
             "schema": {
               "anyOf": [
                 {
-                  "$ref": "#/components/schemas/ContentType"
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ContentType"
+                  }
                 },
                 {
                   "type": "null"
                 }
               ],
-              "description": "Filter by number content type",
+              "description": "Filter by number content type(s); OR",
               "title": "Content Type"
             },
-            "description": "Filter by number content type"
+            "description": "Filter by number content type(s); OR"
           },
           {
             "name": "saved_query_id",

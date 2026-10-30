@@ -7,6 +7,7 @@ import type { ParseKeys } from "i18next";
 import { z } from "zod";
 import type { ActorGender, ListActorsData } from "@/client/types.gen";
 import { ACTOR_SORT_FIELDS, SORT_ORDERS } from "@/lib/exhaustive-maps";
+import { coerceIdList } from "@/lib/facets";
 
 export type ActorListQuery = NonNullable<ListActorsData["query"]>;
 
@@ -22,7 +23,7 @@ export const DEFAULT_ACTOR_GENDER_FILTER = ["female"] as const satisfies readonl
 export const ACTOR_FILTER_KEYS = [
   "has_person",
   "has_image",
-  "user_tag_id",
+  "user_tag_ids",
   "gender",
   "birthday_min",
   "birthday_max",
@@ -51,8 +52,8 @@ export type ActorFilterValues = {
   gender: ActorGender[];
   has_person?: ActorTriBool;
   has_image?: ActorTriBool;
-  /** 用户标签 id; 不设多选, 与面板其余单选控件同形 */
-  user_tag_id?: number;
+  /** 用户标签 id 列表; 同 kind 多值为 OR (命中任一即可), `[]` 表示不限. */
+  user_tag_ids: number[];
   /** 周岁下界 - 仅面板草稿, 应用时 → birthday_max */
   age_min?: number;
   /** 周岁上界 - 仅面板草稿, 应用时 → birthday_min */
@@ -163,11 +164,13 @@ const optionalIntSchema = z.preprocess(
   z.number().int().nonnegative().optional(),
 );
 const optionalStrSchema = z.preprocess(coerceOptionalStr, z.string().optional());
+/** 单值 (旧链接) 与数组都能收; 空结果 → undefined, 不限不写进 URL. */
+const tagIdListSchema = z.preprocess(coerceIdList, z.array(z.number().int().positive()).optional());
 
 export const actorFilterSearchSchema = z.object({
   has_person: z.enum(["true", "false"]).optional(),
   has_image: z.enum(["true", "false"]).optional(),
-  user_tag_id: optionalIntSchema,
+  user_tag_ids: tagIdListSchema,
   gender: genderListSchema,
   birthday_min: optionalStrSchema,
   birthday_max: optionalStrSchema,
@@ -212,7 +215,7 @@ export function actorFilterValuesFromSearch(search: ActorsBrowseSearch): ActorFi
     gender: resolvedActorGenders(search),
     has_person: search.has_person,
     has_image: search.has_image,
-    user_tag_id: search.user_tag_id,
+    user_tag_ids: search.user_tag_ids ?? [],
     birthday_min: search.birthday_min,
     birthday_max: search.birthday_max,
     height_min: search.height_min,
@@ -238,7 +241,10 @@ export function actorListQueryFromSearch(search: ActorsBrowseSearch): ActorListQ
     has_person: parseTriBool(search.has_person),
     has_image: parseTriBool(search.has_image),
     gender: gender.length > 0 ? gender : undefined,
-    user_tag_ids: search.user_tag_id != null ? [search.user_tag_id] : undefined,
+    user_tag_ids:
+      search.user_tag_ids != null && search.user_tag_ids.length > 0
+        ? search.user_tag_ids
+        : undefined,
     birthday_min: search.birthday_min,
     birthday_max: search.birthday_max,
     height_min: search.height_min,
@@ -266,7 +272,7 @@ export function mergeActorFilterPatch(
   }
   if ("has_person" in patch) next.has_person = patch.has_person;
   if ("has_image" in patch) next.has_image = patch.has_image;
-  if ("user_tag_id" in patch) next.user_tag_id = patch.user_tag_id;
+  if ("user_tag_ids" in patch) next.user_tag_ids = patch.user_tag_ids;
   if ("birthday_min" in patch) next.birthday_min = patch.birthday_min;
   if ("birthday_max" in patch) next.birthday_max = patch.birthday_max;
   if ("height_min" in patch) next.height_min = patch.height_min;
@@ -293,7 +299,7 @@ export function replaceActorFilters(
     gender: filters.gender,
     has_person: filters.has_person,
     has_image: filters.has_image,
-    user_tag_id: filters.user_tag_id,
+    user_tag_ids: filters.user_tag_ids,
     birthday_min: filters.birthday_min,
     birthday_max: filters.birthday_max,
     height_min: filters.height_min,
@@ -314,6 +320,7 @@ export function cloneActorFilterValues(filters: ActorFilterValues): ActorFilterV
   return {
     ...filters,
     gender: [...filters.gender],
+    user_tag_ids: [...filters.user_tag_ids],
   };
 }
 
@@ -371,7 +378,7 @@ export function normalizeActorFilterValues(
     gender: [...filters.gender],
     has_person: filters.has_person,
     has_image: filters.has_image,
-    user_tag_id: filters.user_tag_id,
+    user_tag_ids: filters.user_tag_ids,
     birthday_min: fromAge.birthday_min,
     birthday_max: fromAge.birthday_max,
     height_min: filters.height_min,
@@ -388,6 +395,10 @@ export function normalizeActorFilterValues(
   };
 }
 
+function sameIdList(a: readonly number[], b: readonly number[]): boolean {
+  return a.length === b.length && a.every((id, i) => id === b[i]);
+}
+
 export function actorFiltersEqual(a: ActorFilterValues, b: ActorFilterValues): boolean {
   if (a.gender.length !== b.gender.length) return false;
   for (let i = 0; i < a.gender.length; i++) {
@@ -396,7 +407,7 @@ export function actorFiltersEqual(a: ActorFilterValues, b: ActorFilterValues): b
   return (
     a.has_person === b.has_person &&
     a.has_image === b.has_image &&
-    a.user_tag_id === b.user_tag_id &&
+    sameIdList(a.user_tag_ids, b.user_tag_ids) &&
     a.age_min === b.age_min &&
     a.age_max === b.age_max &&
     a.birthday_min === b.birthday_min &&
@@ -443,7 +454,7 @@ function actorGenderFilterIsDefault(gender: readonly ActorGender[]): boolean {
 
 function hasNonGenderActorFilters(filters: ActorFilterValues): boolean {
   if (filters.has_person != null || filters.has_image != null) return true;
-  if (filters.user_tag_id != null) return true;
+  if (filters.user_tag_ids.length > 0) return true;
   if (filters.birthplace != null) return true;
   for (const range of ACTOR_RANGE_FILTERS) {
     if (filters[range.min] != null || filters[range.max] != null) return true;

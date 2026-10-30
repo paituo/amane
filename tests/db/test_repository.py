@@ -829,9 +829,9 @@ class TestMetadataRepo:
         assert [m.number for m in items] == ["HEYZO-1234", "MIDV-002"]
         items, total = await repo.list_metadata(uncensored=False, sort_by=MetadataSortField.NUMBER, order=SortOrder.ASC)
         assert [m.number for m in items] == ["PLAIN-1", "SUB-1"]
-        items, total = await repo.list_metadata(content_type=ContentType.UNCENSORED)
+        items, total = await repo.list_metadata(content_type=[ContentType.UNCENSORED])
         assert [m.number for m in items] == ["HEYZO-1234"]
-        items, total = await repo.list_metadata(mosaic=Mosaic.UNCENSORED)
+        items, total = await repo.list_metadata(mosaic=[Mosaic.UNCENSORED])
         assert [m.number for m in items] == ["MIDV-002"]
 
         summaries = await repo.summarize_media_by_metadata([sub, marked, uncensored, plain])

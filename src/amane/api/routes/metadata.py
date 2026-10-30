@@ -64,12 +64,14 @@ def _file_phase_resp(summary: ParsedFilePhase) -> FilePhaseSummary:
     )
 
 
-def _require_known_definition(definition: str | None) -> str | None:
-    if definition is None:
+def _require_known_definitions(definition: Sequence[str] | None) -> list[str] | None:
+    """未知分辨率一律 422: 静默丢弃会让用户以为筛过了, 实际是全量."""
+    if not definition:
         return None
-    if definition not in DEFINITION_VALUES:
-        raise HTTPException(status_code=422, detail=f"未知分辨率: {definition}")
-    return definition
+    unknown = [value for value in definition if value not in DEFINITION_VALUES]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"未知分辨率: {', '.join(unknown)}")
+    return list(dict.fromkeys(definition))
 
 
 @dataclass(frozen=True)
@@ -89,10 +91,10 @@ class MetadataFilters:
     has_files: bool | None = None
     has_subtitle: bool | None = None
     vr: bool | None = None
-    mosaic: Mosaic | None = None
+    mosaic: Sequence[Mosaic] | None = None
     uncensored: bool | None = None
-    definition: str | None = None
-    content_type: ContentType | None = None
+    definition: Sequence[str] | None = None
+    content_type: Sequence[ContentType] | None = None
     id_subquery_sql: str | None = None
 
 
@@ -116,14 +118,21 @@ def _has_scope_filters(filters: MetadataFilters) -> bool:
     ):
         if scope:
             return True
-    return any(
+    if any(
         value is not None
         for value in (
             filters.has_files,
             filters.has_subtitle,
             filters.vr,
-            filters.mosaic,
             filters.uncensored,
+        )
+    ):
+        return True
+    # 多值筛选项空序列等于不限, 不能按 is not None 判定, 否则会走"先切片再筛"的错路径.
+    return any(
+        bool(value)
+        for value in (
+            filters.mosaic,
             filters.definition,
             filters.content_type,
         )
@@ -215,30 +224,32 @@ async def list_metadata(
     limit: Annotated[int, Query(ge=1, le=200)] = 20,
     sort_by: Annotated[MetadataSortField, Query(description="Sort field")] = MetadataSortField.UPDATED_AT,
     order: Annotated[SortOrder, Query(description="Sort order")] = SortOrder.DESC,
-    actor_id: Annotated[list[int] | None, Query(description="Filter by actor facet id(s); AND")] = None,
-    director_id: Annotated[list[int] | None, Query(description="Filter by director facet id(s); AND")] = None,
-    tag_id: Annotated[list[int] | None, Query(description="Filter by scraped tag facet id(s); AND")] = None,
+    actor_id: Annotated[list[int] | None, Query(description="Filter by actor facet id(s); OR")] = None,
+    director_id: Annotated[list[int] | None, Query(description="Filter by director facet id(s); OR")] = None,
+    tag_id: Annotated[list[int] | None, Query(description="Filter by scraped tag facet id(s); OR")] = None,
     studio_id: Annotated[list[int] | None, Query(description="Filter by studio facet id(s); OR")] = None,
     publisher_id: Annotated[list[int] | None, Query(description="Filter by publisher facet id(s); OR")] = None,
     series_id: Annotated[list[int] | None, Query(description="Filter by series facet id(s); OR")] = None,
-    user_tag_id: Annotated[list[int] | None, Query(description="Filter by user tag id(s); AND")] = None,
+    user_tag_id: Annotated[list[int] | None, Query(description="Filter by user tag id(s); OR")] = None,
     library_id: Annotated[
         list[int] | None, Query(description="Filter by owning library id(s); OR over linked MediaFile(s)")
     ] = None,
     has_files: Annotated[bool | None, Query(description="Filter by presence of linked MediaFile(s)")] = None,
     has_subtitle: Annotated[bool | None, Query(description="Filter by linked file subtitle marker")] = None,
     vr: Annotated[bool | None, Query(description="Filter by VR marker (entry tag vocabulary)")] = None,
-    mosaic: Annotated[Mosaic | None, Query(description="Filter by linked file mosaic marker")] = None,
+    mosaic: Annotated[list[Mosaic] | None, Query(description="Filter by linked file mosaic marker(s); OR")] = None,
     uncensored: Annotated[
         bool | None, Query(description="Filter by uncensored number (own content type or linked file marker)")
     ] = None,
-    definition: Annotated[str | None, Query(description="Filter by linked file definition (8K/4K/1080p/…)")] = None,
-    content_type: Annotated[ContentType | None, Query(description="Filter by number content type")] = None,
+    definition: Annotated[
+        list[str] | None, Query(description="Filter by linked file definition(s) (8K/4K/1080p/…); OR")
+    ] = None,
+    content_type: Annotated[list[ContentType] | None, Query(description="Filter by number content type(s); OR")] = None,
     saved_query_id: Annotated[
         int | None, Query(description="Saved query preset id; AND with other filters via SQL subquery")
     ] = None,
 ) -> MetadataListResponse:
-    definition = _require_known_definition(definition)
+    definition = _require_known_definitions(definition)
     id_subquery_sql = None
     if saved_query_id is not None:
         id_subquery_sql = await resolve_saved_query_id_subquery(repo, saved_query_id, SavedQueryEntity.METADATA)

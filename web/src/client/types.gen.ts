@@ -6069,19 +6069,19 @@ export type ListMetadataData = {
         /**
          * Actor Id
          *
-         * Filter by actor facet id(s); AND
+         * Filter by actor facet id(s); OR
          */
         actor_id?: Array<number> | null;
         /**
          * Director Id
          *
-         * Filter by director facet id(s); AND
+         * Filter by director facet id(s); OR
          */
         director_id?: Array<number> | null;
         /**
          * Tag Id
          *
-         * Filter by scraped tag facet id(s); AND
+         * Filter by scraped tag facet id(s); OR
          */
         tag_id?: Array<number> | null;
         /**
@@ -6105,7 +6105,7 @@ export type ListMetadataData = {
         /**
          * User Tag Id
          *
-         * Filter by user tag id(s); AND
+         * Filter by user tag id(s); OR
          */
         user_tag_id?: Array<number> | null;
         /**
@@ -6135,9 +6135,9 @@ export type ListMetadataData = {
         /**
          * Mosaic
          *
-         * Filter by linked file mosaic marker
+         * Filter by linked file mosaic marker(s); OR
          */
-        mosaic?: Mosaic | null;
+        mosaic?: Array<Mosaic> | null;
         /**
          * Uncensored
          *
@@ -6147,15 +6147,15 @@ export type ListMetadataData = {
         /**
          * Definition
          *
-         * Filter by linked file definition (8K/4K/1080p/…)
+         * Filter by linked file definition(s) (8K/4K/1080p/…); OR
          */
-        definition?: string | null;
+        definition?: Array<string> | null;
         /**
          * Content Type
          *
-         * Filter by number content type
+         * Filter by number content type(s); OR
          */
-        content_type?: ContentType | null;
+        content_type?: Array<ContentType> | null;
         /**
          * Saved Query Id
          *

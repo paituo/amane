@@ -71,6 +71,36 @@ class TestMetadataHttp:
         assert (await client.get("metadata?mosaic=censored")).status_code == 422
 
     @pytest.mark.asyncio(loop_scope="function")
+    async def test_multi_value_phase_filters_are_or(self, client: AsyncClient, repo: Repository) -> None:
+        """同一类多值取并集: 两个分辨率 / 两个马赛克标记 / 两个条目类型勾上后是 OR, 不是交集."""
+        seeded = [
+            ("MVF-001", "/video/MVF-001-4K.mp4"),
+            ("MIDV-002", "/video/MIDV-002-1080p.mp4"),
+            ("MIDV-003", "/video/MIDV-003-流出.mp4"),
+            ("HEYZO-9001", "/video/HEYZO-9001-无码.mp4"),
+        ]
+        for number, path in seeded:
+            meta = await repo.upsert_metadata(number=number)
+            assert meta.id is not None
+            media = await repo.create_media_file(library_id=1, path=path)
+            assert media.id is not None
+            await repo.update_media_file(media.id, metadata_id=meta.id)
+
+        def numbers(payload: dict[str, object]) -> set[str]:
+            items = payload["items"]
+            assert isinstance(items, list)
+            return {item["number"] for item in items}
+
+        by_definition = await client.get("metadata?definition=4K&definition=1080p")
+        assert numbers(by_definition.json()) == {"MVF-001", "MIDV-002"}
+        by_mosaic = await client.get("metadata?mosaic=leaked&mosaic=uncensored")
+        assert numbers(by_mosaic.json()) == {"MIDV-003", "HEYZO-9001"}
+        by_type = await client.get("metadata?content_type=censored&content_type=uncensored")
+        assert numbers(by_type.json()) == {"MVF-001", "MIDV-002", "MIDV-003", "HEYZO-9001"}
+        # 单个非法值仍整体 422, 不静默丢弃.
+        assert (await client.get("metadata?definition=4K&definition=bogus")).status_code == 422
+
+    @pytest.mark.asyncio(loop_scope="function")
     async def test_list_detail_update_delete(self, client: AsyncClient, repo: Repository):
         empty = await client.get("metadata")
         assert empty.status_code == 200

@@ -348,12 +348,17 @@ function ActorsIndexPage() {
               onClear={() => clearFilterKeys(["birthplace"])}
             />
           )}
-          {filters.user_tag_id != null && (
+          {filters.user_tag_ids.map((tagId) => (
             <ActiveUserTagChip
-              tagId={filters.user_tag_id}
-              onClear={() => applyFilterPatch({ user_tag_id: undefined })}
+              key={tagId}
+              tagId={tagId}
+              onClear={() =>
+                applyFilterPatch({
+                  user_tag_ids: filters.user_tag_ids.filter((id) => id !== tagId),
+                })
+              }
             />
-          )}
+          ))}
           {filters.has_person != null && (
             <ActiveFilterChip
               label={

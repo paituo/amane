@@ -8,8 +8,8 @@ import {
   Collapse,
   Group,
   Input,
+  MultiSelect,
   NumberInput,
-  Select,
   Stack,
   Text,
   TextInput,
@@ -273,9 +273,10 @@ export function ActorFilterControls({ opened, committed, onApply }: ActorFilterC
             onChange={(has_image) => patchDraft({ has_image })}
           />
           <Input.Wrapper label={t("detail.userTags")} size="sm">
-            <Select
+            {/* 多选: 服务端同 kind 为 OR, 命中任一标签即可. 空选 = 不限. */}
+            <MultiSelect
               size="sm"
-              w={160}
+              w={220}
               clearable
               searchable
               placeholder={t("search.hasFilesAny")}
@@ -283,9 +284,13 @@ export function ActorFilterControls({ opened, committed, onApply }: ActorFilterC
                 value: String(tag.id),
                 label: tag.name,
               }))}
-              value={draft.user_tag_id != null ? String(draft.user_tag_id) : null}
-              onChange={(value) =>
-                patchDraft({ user_tag_id: value != null ? Number(value) : undefined })
+              value={draft.user_tag_ids.map(String)}
+              onChange={(values) =>
+                patchDraft({
+                  user_tag_ids: (userTags?.items ?? [])
+                    .map((tag) => tag.id)
+                    .filter((id) => values.includes(String(id))),
+                })
               }
             />
           </Input.Wrapper>

@@ -116,10 +116,12 @@ def _build_browse_filters(
         filters.append(_has_person_expr())
     elif params.has_person is False:
         filters.append(~_has_person_expr())
-    filters.extend(
-        col(Actor.id).in_(select(ActorUserTag.actor_id).where(col(ActorUserTag.user_tag_id) == user_tag_id))
-        for user_tag_id in unique_ids(params.user_tag_ids)
-    )
+    # 同 kind 多值为 OR (命中任一标签即可): 逐个串联会退化成"同时具备所有标签", 与筛选器直觉相反.
+    user_tag_id_list = unique_ids(params.user_tag_ids)
+    if user_tag_id_list:
+        filters.append(
+            col(Actor.id).in_(select(ActorUserTag.actor_id).where(col(ActorUserTag.user_tag_id).in_(user_tag_id_list)))
+        )
     if params.has_image is True:
         filters.append(_has_image_expr())
     elif params.has_image is False:

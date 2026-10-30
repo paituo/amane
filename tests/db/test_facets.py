@@ -268,24 +268,29 @@ class TestFacetFilterCombine:
         assert n == 1
         assert items[0].number == "SSIS-001"
 
-    async def test_multi_actor_and(self, repo: Repository) -> None:
+    async def test_multi_actor_or(self, repo: Repository) -> None:
+        """同 kind 多值为 OR: 勾两个演员是"任一出演", 不是"两人合作"."""
         await repo.upsert_metadata(number="MA-001", actors=["Alice", "Bob"])
         await repo.upsert_metadata(number="MA-002", actors=["Alice"])
         await repo.upsert_metadata(number="MA-003", actors=["Bob", "Carol"])
         actors, _ = await repo.list_facets(FacetKind.ACTOR)
         by_name = {a.name: a.id for a in actors}
         items, n = await repo.list_metadata(actor_ids=[by_name["Alice"], by_name["Bob"]])
-        assert n == 1 and items[0].number == "MA-001"
+        assert n == 3
+        assert {i.number for i in items} == {"MA-001", "MA-002", "MA-003"}
 
-    async def test_multi_tag_and_with_actor(self, repo: Repository) -> None:
+    async def test_multi_tag_or_within_kind_and_across_kinds(self, repo: Repository) -> None:
+        """跨 kind 仍是 AND: 演员命中且 (标签 t1 或 t2) 命中."""
         await repo.upsert_metadata(number="MT-001", actors=["Alice"], tags=["t1", "t2"])
         await repo.upsert_metadata(number="MT-002", actors=["Alice"], tags=["t1"])
         await repo.upsert_metadata(number="MT-003", actors=["Bob"], tags=["t1", "t2"])
+        await repo.upsert_metadata(number="MT-004", actors=["Alice"], tags=["t3"])
         actors, _ = await repo.list_facets(FacetKind.ACTOR, search="Alice")
         tags, _ = await repo.list_facets(FacetKind.TAG)
         by_tag = {t.name: t.id for t in tags}
         items, n = await repo.list_metadata(actor_ids=[actors[0].id], tag_ids=[by_tag["t1"], by_tag["t2"]])
-        assert n == 1 and items[0].number == "MT-001"
+        assert n == 2
+        assert {i.number for i in items} == {"MT-001", "MT-002"}
 
     async def test_multi_studio_or(self, repo: Repository) -> None:
         await repo.upsert_metadata(number="MS-001", studio="StudioA")
@@ -819,14 +824,19 @@ class TestActorUserTags:
         carol = await _facet_id(repo, FacetKind.ACTOR, "Carol")
         fav_id, later_id = await _tag_ids(repo, "收藏", "稍后看")
 
-        assert await repo.apply_actor_user_tags([alice, bob, 9999], [fav_id, later_id], action="attach") == (2, 0, 1)
+        assert await repo.apply_actor_user_tags([alice, bob, 9999], [fav_id], action="attach") == (2, 0, 1)
+        # 只给 Alice 再挂一个 later_id, 让多值 OR 与 AND 的结果可区分.
+        (applied, *_rest) = await repo.apply_actor_user_tags([alice], [later_id], action="attach")
+        assert applied == 1
         assert [t.name for t in await repo.list_actor_user_tags(alice)] == ["收藏", "稍后看"]
-        # 挂载后即成为演员列表的筛选条件, 多值为 AND
+        # 挂载后即成为演员列表的筛选条件, 同 kind 多值为 OR (命中任一标签即可)
         items, total = await repo.browse_actors(ActorBrowseParams(user_tag_ids=[fav_id]))
         assert total == 2 and {i.name for i in items} == {"Alice", "Bob"}
+        items, total = await repo.browse_actors(ActorBrowseParams(user_tag_ids=[later_id]))
+        assert total == 1 and items[0].name == "Alice"
         items, total = await repo.browse_actors(ActorBrowseParams(user_tag_ids=[fav_id, later_id]))
-        assert total == 2
-        await repo.apply_actor_user_tags([bob], [later_id], action="detach")
+        assert total == 2 and {i.name for i in items} == {"Alice", "Bob"}
+        await repo.apply_actor_user_tags([bob], [fav_id], action="detach")
         items, total = await repo.browse_actors(ActorBrowseParams(user_tag_ids=[fav_id, later_id]))
         assert total == 1 and items[0].name == "Alice"
         assert await repo.list_actor_user_tags(carol) == []

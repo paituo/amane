@@ -158,7 +158,7 @@ function FacetDetailPage() {
             {actorTotal > actorItems.length && (
               <Link
                 to="/actors"
-                search={{ user_tag_id: id, gender: [] }}
+                search={{ user_tag_ids: [id], gender: [] }}
                 style={{ textDecoration: "none" }}
               >
                 <Anchor component="span" size="sm">

@@ -155,16 +155,16 @@ function MetaIndexPage() {
   const filePhase: FilePhaseFilters = {
     has_subtitle: parseHasFiles(search.has_subtitle),
     uncensored: parseHasFiles(search.uncensored),
-    mosaic: search.mosaic ?? null,
-    definition: search.definition ?? null,
-    content_type: search.content_type ?? null,
+    mosaic: search.mosaic ?? [],
+    definition: search.definition ?? [],
+    content_type: search.content_type ?? [],
   };
   const phaseActive =
     filePhase.has_subtitle !== null ||
     filePhase.uncensored !== null ||
-    filePhase.mosaic != null ||
-    filePhase.definition != null ||
-    filePhase.content_type != null;
+    filePhase.mosaic.length > 0 ||
+    filePhase.definition.length > 0 ||
+    filePhase.content_type.length > 0;
   const [searchInput, setSearchInput] = useResettingState(() => search.q ?? "", search.q);
   const [advancedOpen, setAdvancedOpen] = useState(
     hasFiles !== null || vr !== null || phaseActive || libraryIds.length > 0,
@@ -196,9 +196,9 @@ function MetaIndexPage() {
     vr: vr === null ? undefined : vr,
     has_subtitle: filePhase.has_subtitle === null ? undefined : filePhase.has_subtitle,
     uncensored: filePhase.uncensored === null ? undefined : filePhase.uncensored,
-    mosaic: filePhase.mosaic ?? undefined,
-    definition: filePhase.definition ?? undefined,
-    content_type: filePhase.content_type ?? undefined,
+    mosaic: filePhase.mosaic.length > 0 ? filePhase.mosaic : undefined,
+    definition: filePhase.definition.length > 0 ? filePhase.definition : undefined,
+    content_type: filePhase.content_type.length > 0 ? filePhase.content_type : undefined,
     library_id: search.library_id,
     ...filters,
     ...(search.saved_query_id != null ? { saved_query_id: search.saved_query_id } : {}),
@@ -331,9 +331,9 @@ function MetaIndexPage() {
         ...prev,
         has_subtitle: triToSearch(value.has_subtitle),
         uncensored: triToSearch(value.uncensored),
-        mosaic: value.mosaic ?? undefined,
-        definition: value.definition ?? undefined,
-        content_type: value.content_type ?? undefined,
+        mosaic: value.mosaic.length > 0 ? value.mosaic : undefined,
+        definition: value.definition.length > 0 ? value.definition : undefined,
+        content_type: value.content_type.length > 0 ? value.content_type : undefined,
         page: 1,
       }),
     });
@@ -539,22 +539,24 @@ function MetaIndexPage() {
               onClear={() => setFilePhaseFilter({ ...filePhase, uncensored: null })}
             />
           )}
-          {filePhase.mosaic != null && (
+          {filePhase.mosaic.length > 0 && (
             <ActiveTriChip
-              label={`${t("search.mosaic")}: ${t(`search.mosaics.${filePhase.mosaic}`)}`}
-              onClear={() => setFilePhaseFilter({ ...filePhase, mosaic: null })}
+              label={`${t("search.mosaic")}: ${filePhase.mosaic.map((m) => t(`search.mosaics.${m}`)).join(" / ")}`}
+              onClear={() => setFilePhaseFilter({ ...filePhase, mosaic: [] })}
             />
           )}
-          {filePhase.definition != null && (
+          {filePhase.definition.length > 0 && (
             <ActiveTriChip
-              label={`${t("search.definition")}: ${filePhase.definition}`}
-              onClear={() => setFilePhaseFilter({ ...filePhase, definition: null })}
+              label={`${t("search.definition")}: ${filePhase.definition.join(" / ")}`}
+              onClear={() => setFilePhaseFilter({ ...filePhase, definition: [] })}
             />
           )}
-          {filePhase.content_type != null && (
+          {filePhase.content_type.length > 0 && (
             <ActiveTriChip
-              label={`${t("search.contentType")}: ${t(`search.contentTypes.${filePhase.content_type}`)}`}
-              onClear={() => setFilePhaseFilter({ ...filePhase, content_type: null })}
+              label={`${t("search.contentType")}: ${filePhase.content_type
+                .map((c) => t(`search.contentTypes.${c}`))
+                .join(" / ")}`}
+              onClear={() => setFilePhaseFilter({ ...filePhase, content_type: [] })}
             />
           )}
           {active.map(({ kind, id }) => (
